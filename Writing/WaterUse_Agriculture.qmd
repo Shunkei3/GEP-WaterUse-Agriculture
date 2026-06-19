@@ -1,0 +1,299 @@
+---
+title: "Water Provisioning Services for Agricultural Production"
+format:
+  docx:
+    reference-doc: z_Template/word_template_noindent.docx
+    toc: false
+    toc-depth: 3
+    number-sections: false
+    colorlinks: true
+bibliography: 2_Water.bib
+execute:
+  cache: false
+  echo: false
+  message: false
+  error: false
+
+  fig-align: "center"
+---
+
+# Introduction
+
+Water provisioning for agricultural production is a critical ecosystem service that underpins global food production and rural livelihoods. In crop production, this service operates through both precipitation-derived soil moisture and irrigation water withdrawn from surface water and groundwater systems. Given the reliance of crop production on these distinct water sources, we account for both rainfed and irrigated production systems in our estimation of agricultural water-provisioning GEP. 
+
+We distinguish between green water and blue water. In agricultural production, green water refers to precipitation that is stored in the soil and consumed by crops through evapotranspiration, whereas blue water refers to water withdrawn from surface-water and groundwater systems for irrigation [@Falkenmark.Rockstrom2006]. Rainfed crop production relies primarily on green water. In contrast, irrigated crop production depends on both green water and blue water, because irrigation supplements rather than fully replaces precipitation-derived soil moisture. We therefore separately account for the green-water and blue-water contributions to the observed production value of irrigated crops.
+
+GEP associated with agricultural water use measures the portion of observed crop production value that is attributable to ecosystem water provisioning services. For crop $j$ in country $r$, agricultural water-provisioning GEP is calculated as:
+
+$$
+GEP_{jr} = \lambda^{gn,rf}_{jr} \widehat{GVA}^{rf}_{jr} + \lambda^{gn,ir}_{jr} \widehat{GVA}^{ir}_{jr} + \lambda^{bl,ir}_{jr} \widehat{GVA}^{ir}_{jr},
+$$
+
+where $\widehat{GVA}^{rf}_{jr}$ and $\widehat{GVA}^{ir}_{jr}$ denote value-added-adjusted production value for rainfed and irrigated production, respectively. These variables are constructed from crop gross production value and a country-level value-added adjustment factor, as described in the Data section. The terms $\lambda^{gn,rf}_{jr}$, $\lambda^{gn,ir}_{jr}$, and $\lambda^{bl,ir}_{jr}$ are crop-country-specific water-contribution coefficients. They measure the shares of value-added-adjusted production value linked to green water on rainfed land, green water on irrigated land, and blue irrigation water on irrigated land, respectively. Total agricultural water-provisioning GEP is obtained by summing $GEP_{jr}$ across covered crops and countries.
+
+The analysis is conducted for the set of CropGBWater crop classes [@Chukalla.etal2025a] that can be linked to FAOSTAT gross production value [@FAO2024] and crop production quantities by production system from SPAM 2020 [@SPAM2026]. Because crop classifications differ across datasets, FAOSTAT crop items are harmonized to CropGBWater crop classes. For crop groups or shared FAOSTAT items that correspond to multiple CropGBWater crops, production value is allocated using SPAM-based production shares. In total, 28 crop classes are covered in this analysis. The included crop classes are banana, plantain, barely, dry brans, citrus, cotton, other cereals, groundnut, maize, pearl millet, small millet, potato, chickpeas, cowpea, lentil, other pulses, pigeon pea, sorghum, soybean, sugar beet, sugarcane, sunflower, tobacco, tomato, other vegetables, winter wheat (full-cover variant), winter wheat, spring wheat. 
+
+<!-- Table 1 lists the included crop classes and their corresponding FAOSTAT items. -->
+
+```{r}
+# cropgbwater_fao_ky_kc_dt <- 
+#   fread(here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv"))
+```
+
+The following sections describe the data and methods used to estimate agricultural water-provisioning GEP. We first describe the conceptual framework for estimating crop- and country-specific water-contribution coefficients, $\lambda^{gn,rf}_{jr}$, $\lambda^{gn,ir}_{jr}$, and $\lambda^{bl,ir}_{jr}$. We then describe the data used to construct production values, rainfed and irrigated production shares, and crop-country water-consumption measures. Finally, we present the resulting estimates of agricultural water-provisioning GEP by country.
+
+# Conceptual framework for constructing water-contribution coefficients
+
+In this section, we describe how the water-contribution coefficients, ($\lambda^{gn,rf}_{jr}$, $\lambda^{gn,ir}_{jr}$, and $\lambda^{bl,irr}_{jr}$) are derived. These coefficients measure the share of crop production value that is attributable to ecosystem water provisioning through green water on rainfed land, green water on irrigated land, and blue irrigation water on irrigated land, respectively. 
+
+Estimating the contribution of water provisioning to agricultural production is challenging because observed crop production reflects the joint contribution of many inputs, including land, labor, fertilizer, seeds, machinery, management, and water. Moreover, water often interacts with other yield-determining inputs. For example, fertilizer becomes less effective when water availability is insufficient, while additional water may generate limited yield gains if nutrient availability, soil conditions, or crop management are constraining. Thus, the same crop output cannot be uniquely decomposed into separate water and non-water contributions without imposing an explicit attribution rule.
+
+Production-function approaches can estimate the marginal productivity of water and its associated shadow or implicit value by measuring how crop output changes with an additional unit of water, holding other inputs constant. This approach was taken, for example, by @Grammatikopoulou.etal2020, who estimate the marginal productivity and implicit value of green water in cereal crop production using the Czech Republic as a case study. However, marginal values do not, by themselves, provide a complete attribution rule for separating observed production value into water and non-water contributions. They measure the value of an incremental change in water availability at observed input levels, rather than the share of existing production value supported by water provisioning. Recovering such a share would require specifying an explicit counterfactual level of water availability and assumptions about how other inputs, management decisions, and production systems would respond under that counterfactual.
+
+In this study, we adopt a biophysical attribution approach based on agronomical crop-water production relationships. From an agronomic perspective, ecosystem water provisioning supports crop production by satisfying crop water requirements during the growing season. The contribution of water to observed production value therefore depends not only on the total volume of water consumed by crops, but also on the extent to which this water meets crop water demand during growth stages that are relevant for yield formation. In this light, we construct crop-country-specific water-contribution coefficients based on water satisfaction during crop growth stages. Specifically, we compare actual crop water consumption with crop water requirements and weight this relationship by the yield sensitivity of each growth stage. This approach translates the biophysical role of water in supporting crop growth into an attribution coefficient that can be applied to observed crop production value.
+
+To characterize the relationship between crop yield and water stress, we use the modified @Stewart.etal1977 crop water production function as presented by @Igbadun.etal2007.
+
+$$
+1 - \frac{Ya_{jr}}{Ym_{jr}} = \sum_{h \in G} Ky_{jh} \left(1 - \frac{ETa_{jrh}}{ETm_{jrh}}\right),
+$$
+
+$Ya_{jr}$ is actual crop yield, $Ym_{jr}$ is maximum crop yield under no water stress for crop $j$ in country $r$. $G$ denotes the set of crop growth stages following the FAO crop-growth-stage classification. Specifically, $G$ includes the initial, crop-development, mid-season, and late-season stages. The parameter $Ky_{jh}$ is a crop-specific yield response factor for crop $j$ and growth stage $h$, $ETa_{jrh}$ is actual evapotranspiration for crop $j$ in country $r$ during growth stage $h$, and $ETm_{jrh}$ is maximum crop evapotranspiration. The term $1 - ETa_{jrh}/ETm_{jrh}$ measures the relative evapotranspiration deficit in each growth stage, while $Ky_{jh}$ measures the sensitivity of crop yield to that deficit. $Ky_{jh}$ captures the complex physiological relationship between crop growth and water availability. This relationship has been empirically verified as a workable approximation for the impact of water stress on crop yield [@Smith.Steduto2012].
+
+This crop water production function is closely related to the widely used @Doorenbos.etal1979 yield-response function in the agronomic literature, $1 - Y_a/Y_m = Ky (1 - ETa/ETm)$, but extends it by allowing both yield sensitivity and evapotranspiration deficit to vary across crop-growth stages.
+
+To apply this crop-water production framework to green and blue water, we decompose actual crop evapotranspiration by water source and production system. For rainfed production, total crop water consumption is given by green water consumption $ETa^{total, rf}_{jrh} = ETa^{gn,rf}_{jrh}$. For irrigated production, total crop water consumption is the sum of green and blue water consumption, $ETa^{total, irr}_{jrh} = ETa^{gn,irr}_{jrh} + ETa^{bl,irr}_{jrh}$.
+
+Since evapotranspiration above the crop’s unstressed water requirement does not further reduce water stress, we cap total actual evapotranspiration at maximum crop evapotranspiration.
+
+$$
+ETa^{sat, k}_{jrh} = \min(ETa^{total,k}_{jrh}, ETm_{jrh}),
+$$
+
+where $k$ denotes the production system, $k \in \{rf, irr\}.$ For each production system, we define the water satisfaction ratio as
+
+$$
+s^{total, k}_{jrh} = \frac{ETa^{sat, k}_{jrh}}{ETm_{jrh}}.
+$$
+
+Thus, $s^{total, k}_{jrh}$ is bounded between zero and one. A value of $s^{total, k}_{jrh} = 1$ indicates that total crop water consumption in production system $k$ fully satisfies the crop water requirement in growth stage $h$, while values below one indicate partial satisfaction of that requirement. The crop-water production function can then be written in terms of total water satisfaction as
+
+$$
+1 - \frac{Ya_{jr}}{Ym_{jr}} = \sum_{h \in G} Ky_{jh} (1 - s^{total, k}_{jrh}).
+$$
+
+This expression provides the basis for constructing the water-contribution coefficient. If water requirement are not satisfied in any stage, the stage-weighted water-stress-loss index reaches its maximum value, $\sum_{h \in G} Ky_{jh}$. At the observed satisfaction level, $Ky_{jh}s^{total,k}_{jrh}$ represents the portion of the maximum stage-specific water-stress-loss index avoided in stage $h$. We therefore define the production-system-specific total water-contribution coefficient, $\lambda^{k}_{jr}$, as the share of maximum water-stress loss avoided by actual water satisfaction, where the water-stress is weighted by the crop’s yield sensitivity to water stress in each growth stage:
+
+$$
+\lambda^{k}_{jr} = \frac{\sum_{h \in G} Ky_{jh} s^{total,k}_{jrh}}{\sum_{h \in G} Ky_{jh}}.
+$$
+
+For rainfed production, total water satisfaction is entirely attributed to green water. For irrigated production, total water satisfaction is jointly supported by green water and blue irrigation water. When we examine the green and blue water contributions separately, we decompose this satisfied evapotranspiration into green and blue components according to their shares in total irrigated crop water consumption.
+
+This formulation gives greater weight to water satisfaction in growth stages where yield is more sensitive to water stress. Thus $\lambda^{k}_{jr}$ can be interpreted as a normalized avoided water-stress-loss indices. They measures the degree to which ecosystem water provisioning supports crop production by reducing yield-relevant water stress.
+
+This biophysical attribution coefficient is then multiplied by value-added-adjusted production value to estimate the portion of the monetary value base attributable to ecosystem water provisioning. As described in the Data section, value-added-adjusted production value for crop $j$ in country $r$ and production system $k$ is calculated as $\widehat{GVA}^{k}_{jr} = \theta_r \times GPV^{k}_{jr}$, where $\theta_r$ is a country-level value-added adjustment factor. Thus, the GEP contribution of water provisioning for crop $j$ in country $r$ and production system $k$ is given by $\lambda^{k}_{jr} \widehat{GVA}^{k}_{jr}$. 
+
+To see the connection between the biophysical attribution coefficient and the monetary valuation, note that gross production value can be written as $GPV^{k}_{jr} = P_{jr} Y^{k}_{jr} A^{k}_{jr}$, where $P_{jr}$ is crop price, $Y^{k}_{jr}$ is crop yield, and $A^{k}_{jr}$ is harvested area for crop $j$, country $r$, and production system $k$. Substituting and rearranging this expression into the value-added-adjusted monetary base gives 
+
+$$
+\lambda^{k}_{jr} \widehat{GVA}^{k}_{jr} = \theta_r \cdot P_{jr} A^{k}_{jr} (\lambda^{k}_{jr} Y^{k}_{jr}).
+$$
+
+The term $\lambda^{k}_{jr} Y^{k}_{jr}$ represents the yield-equivalent portion of observed crop yield under production system $k$ that is attributable to ecosystem water provisioning. Under the avoided-water-stress attribution approach, it can be interpreted as the portion of observed yield supported by actual ecosystem water availability through the reduction of yield-relevant water stress. Multiplying this yield-equivalent contribution by crop price, harvested area, and the value-added adjustment factor expresses the ecosystem-water contribution on a value-added-adjusted monetary basis. This value is not interpreted as a direct counterfactual estimate of yield or production losses in the absence of ecosystem water. Rather, it is an ecosystem-accounting value based on a biophysical attribution rule.
+
+<!-- Since $\lambda^{k}_{jr}$ is applied to the yield component of this expression, the attribution coefficient $\lambda^{k}_{jr}$ is applied to the yield component of this expression. Therefore,  -->
+
+# Data
+
+## Country-crop-specific gross production value and value-added adjustment
+
+Gross production value is obtained from FAOSTAT [@FAO2024]. We use crop-country gross production value in current thousand US dollars for 2020. FAOSTAT derives production value from production quantities of primary commodities and producer prices, so gross production value represents the farm-gate monetary value of crop output. FAOSTAT reports this value by country and crop, but it does not distinguish between rainfed and irrigated production.
+
+Because our GEP framework separately values water provisioning for rainfed and irrigated production, we split total crop production value using rainfed and irrigated production shares from SPAM 2020 v2.2 global production data [@SPAM2026]. Let $GPV^{total}_{jr}$ denote the total gross production value of crop $j$ in country $r$. Then we construct rainfed and irrigated gross production value as
+
+$$
+GPV^{rf}_{jr} = GPV^{total}_{jr} \times \frac{Q^{rf}_{jr}}{Q^{rf}_{jr} + Q^{irr}_{jr}},
+$$
+
+and
+
+$$
+GPV^{irr}_{jr} = GPV^{total}_{jr} \times \frac{Q^{irr}_{jr}}{Q^{rf}_{jr} + Q^{irr}_{jr}},
+$$
+
+where $Q^{rf}_{jr}$ and $Q^{irr}_{jr}$ are rainfed and irrigated production quantities from SPAM 2020. This allocation implicitly assumes that, within a crop-country cell, rainfed and irrigated output have the same producer price, so their shares of total production value are proportional to their shares of physical production.
+
+To reduce the extent to which the monetary base reflects the value of purchased intermediate inputs, we convert rainfed and irrigated gross production value into a value-added-adjusted production-value measure. Given the lack of crop-country-specific value-added data, we apply a country-level value-added adjustment factor, $\theta_r$, to both $GPV^{rf}_{jr}$ and $GPV^{ir}_{jr}$. Let $\widehat{GVA}^{k}_{jr}$ denote the value-added-adjusted production value for crop $j$ in country $r$ and production system $k \in \{rf, irr\}$. Then,
+
+$$
+\widehat{GVA}^{k}_{jr} = \theta_r \times GPV^{k}_{jr},
+$$
+
+The adjustment factor $\theta_r$ is defined as the ratio of value added to gross output for country $r$ 
+
+$$
+\theta_r = \frac{VA_r}{GO_r}.
+$$
+, where $VA_r$ denotes agricultural value added and $GO_r$ denotes monetary value of agricultural gross output. 
+
+
+$\theta_r$ is calculated using FAOSTAT Macro Indicators for Value Added (Agriculture) and Gross Output (Agriculture). However, these FAOSTAT indicators are not available for all countries. When the agriculture-only ratio is unavailable, we use the ratio of Value Added to Gross Output for Agriculture, Forestry and Fishing as a sector-consistent fallback. Across countries for which both ratios are available, the agriculture-only and Agriculture, Forestry and Fishing ratios are highly correlated, with a Pearson correlation coefficient of 0.96, and the mean absolute difference is 0.03. Thus, the sector-consistent fallback provides a reasonable approximation for the agriculture-only ratio when the latter is unavailable.
+
+For countries without a country-specific FAOSTAT ratio, missing $\theta_r$ values are imputed using World Bank country metadata. The World Bank metadata provide standardized country identifiers and classifications, including ISO3 country codes, country names, geographic regions, income groups. We merge these metadata and use the World Bank region and income-group classifications to construct imputed values. Specifically, we use the median $\theta_r$ among countries in the same World Bank region and income group when that cell contains at least five observed or same-country FAOSTAT-based values. If the region-income cell is too small, we use the broader World Bank region median.
+
+The resulting $\widehat{GVA}^{k}_{jr}$ values provide a value-added-adjusted monetary base for estimating agricultural water-provisioning GEP. This adjustment is intended to remove the portion of gross production value associated with purchased intermediate inputs, such as fertilizer, seeds, pesticides, fuel, and other inputs used up during production. The adjusted monetary base therefore approximates the value added generated by crop production, rather than the full farm-gate value of crop output. The water-contribution coefficients are then applied to this adjusted value base to estimate the portion of agricultural value added supported by ecosystem water provisioning.
+
+
+<!-- The crop categories in FAOSTAT and SPAM 2020 do not perfectly align with the crop classes in CropGBWater. For example, winter wheat, spring wheat, and the winter wheat full-cover variant are grouped under "wheat" in FAOSTAT and SPAM 2020, while pearl millet and small millet are grouped under "millet." For these cases, we allocate the gross production value of the aggregated crop item to the corresponding CropGBWater crop classes using their relative production shares. -->
+
+
+## Country-crop-specific water-contribution coefficients
+
+Country-crop-specific water-contribution coefficients are derived from CropGBWater water-consumption data (v4) [@Chukalla.etal2025a]. CropGBWater provides gridded crop water consumption by crop, water source, and production system, distinguishing green water consumption on rainfed land, green water consumption on irrigated land, and blue water consumption on irrigated land. The water-consumption variables are reported at the monthly scale and correspond to the actual evapotranspiration components used in the $\lambda^{k}_{jr}$ estimation framework.
+
+To construct crop water requirements, we use daily reference evapotranspiration, $ET_0$, from the CropGBWater reference evapotranspiration datasets. These datasets provide daily $ET_0$ values for each CropGBWater climate grid. We combine daily $ET_0$ with crop-calender information and crop coefficients from CropGBWater, including planting dates, growth-stage lengths, and stage-specific $Kc_{jh}$ values. Maximum crop evapotranspiration is then calculated as 
+
+$$
+ETm_{jgdh} = Kc_{jh} \times ET0_{gdh},
+$$
+
+where $g$ denotes grid cell, $d$ denotes day, and $h$ denotes crop growth stage. Daily values are aggregated to crop-stage totals and used as the crop water requirement against which actual green and blue water consumption is compared.
+
+Because CropGBWater water-consumption data are monthly, while the crop-water production function requires water satisfaction by growth stage, we allocate monthly water consumption to crop growth stages before constructing the water satisfaction ratios. For each crop grid and month, daily $ETm$ values are aggregated by growth stage to determine the share of monthly crop water requirements associated with each stage. Monthly green and blue water consumption is then distributed across growth stages in proportion to these stage-specific shares of monthly $ETm$. This procedure assigns more monthly water consumption to stages that account for a larger share of crop water requirements within that month.
+
+Stage-specific yield response factors, $Ky_{jh}$, are obtained from the FAO/CROPWAT crop-water response parameters and matched to CropGBWater crop classes. These parameters indicate the relative sensitivity of crop yield to water stress in each growth stage. Combining stage-specific water satisfaction ratios with the corresponding $Ky_{jh}$ values yields the crop-country water-contribution coefficients used in the GEP calculation. We access the crop-parameter table through the R `CropWat` package (version 0.2.2), which provides an implementation of the FAO CROPWAT crop-parameter framework [@Dorchies.etal2026].
+
+{{< pagebreak >}}
+
+# Results
+
+@tbl-lambda-calculation presents the estimated water-contribution coefficients aggregated by crop across countries. It shows that rainfed green water generally accounts for a substantial share of yield-relevant water satisfaction, while green water on irrigated land generally contributes a smaller share compared to rainfed production. This pattern is consistent with the conditions under which rainfed and irrigated production are typically practiced. Rainfed production is more common where precipitation-derived soil moisture is relatively sufficient to support crop growth, whereas irrigated production is more common where rainfall alone is insufficient, unreliable, or poorly timed relative to crop water requirements. It is therefore expected that green water accounts for a larger share of water-provisioning contribution on rainfed land than on irrigated land.
+
+For irrigated production, green and blue water contributions should be interpreted jointly. When these two components are combined, irrigated production generally shows a higher level of yield-relevant water satisfaction than rainfed production. This pattern is consistent with the agronomic role of irrigation in supplementing precipitation-derived soil moisture and reducing water stress. Blue water can be particularly important during critical growth stages when crop water requirements are high and rainfall is insufficient. Because the water-contribution coefficients are constructed from growth-stage-specific water satisfaction weighted by stage-specific yield sensitivity, the estimated coefficients reflect the role of blue water in reducing yield-relevant water stress within the growing season.
+
+```{r}
+#| label: tbl-lambda-calculation
+#| tbl-cap: "Crop-average water-contribution coefficients by water source and production system"
+
+suppressPackageStartupMessages(library(flextable))
+
+lambda_jr_dt <- 
+  fread(here("Data/Processed/lambda_jr_tbl_CropGBWater.csv")) %>%
+  .[, .(Country = ADM0_NAME, Crop = crop_name, lambda_gn_rf, lambda_gn_ir, lambda_bl_ir)] %>%
+  .[, 
+    .(
+      lambda_gn_rf = round(mean(lambda_gn_rf, na.rm = TRUE), 3),
+      lambda_gn_ir = round(mean(lambda_gn_ir, na.rm = TRUE), 3),
+      lambda_bl_ir = round(mean(lambda_bl_ir, na.rm = TRUE), 3)
+    ), by = Crop
+  ]
+
+lambda_jr_tbl <-
+  flextable(lambda_jr_dt) %>%
+  set_header_labels(
+    Crop = "Crop",
+    lambda_gn_rf = "Green\nrainfed",
+    lambda_gn_ir = "Green\nirrigated",
+    lambda_bl_ir = "Blue\nirrigated"
+  ) %>%
+  colformat_num(
+    j = c("lambda_gn_rf", "lambda_gn_ir", "lambda_bl_ir"),
+    digits = 3
+  ) %>%
+  fontsize(size = 8, part = "all") %>%
+  padding(padding = 2, part = "all") %>%
+  width(j = "Crop", width = 2.1) %>%
+  width(j = c("lambda_gn_rf", "lambda_gn_ir", "lambda_bl_ir"), width = 1.0) %>%
+  set_table_properties(layout = "fixed")
+
+lambda_jr_tbl
+```
+
+@tbl-gep-country presents country-level agricultural water-provisioning GEP in 2020 for the covered 28 crops, decomposed into green water on rainfed land, green water on irrigated land, and blue water on irrigated land. Aggregating across countries and available component estimates, total agricultural water-provisioning GEP in 2020 is estimated at approximately $554.5$ billion US dollars. Rainfed green water accounts for the largest component, with an estimated value of approximately $324.4$ billion US dollars, or $58.5\%$ of total GEP. Green water on irrigated land accounts for about $107.9$ billion US dollars, or $19.5 \%$ of total GEP, while blue water on irrigated land accounts for about $122.2$ billion US dollars, or $22.0\%$. Taken together, green and blue water on irrigated land account for $230.1$ billion current US dollars, or $41.5\%$ of total agricultural water-provisioning GEP. Thus, rainfed green water remains the dominant component of agricultural water-provisioning GEP, but irrigated production represents a substantial share of the total value.
+
+The country-level estimates are highly concentrated among countries with large crop production values and substantial water-dependent agricultural production. China has the largest estimated agricultural water-provisioning GEP, at approximately $205.2$ billion current US dollars, followed by India at $81.1$ billion, the United States at $48.9$ billion, Brazil at $29.1$ billion, and Pakistan at $11.1$ billion. Together, these five countries account for approximately $67.7\%$ of the total value-added-adjusted GEP across the covered countries. This concentration reflects both the scale of crop production and the degree to which green and blue water satisfy yield-relevant crop water requirements.
+
+The composition of GEP differs substantially across countries. In countries such as Brazil, Canada, Russia, Ethiopia, Argentina, and Ukraine, rainfed green water accounts for most agricultural water-provisioning GEP, reflecting the importance of rainfed production in these systems. In contrast, countries such as Egypt, Pakistan, Iran, Mexico, and Spain have much larger irrigated components. Blue irrigation water is especially important in arid and irrigation-dependent production systems, including Egypt, Pakistan, Iran, and Algeria. These differences show that agricultural water-provisioning GEP depends not only on the total value of crop production, but also on the relative importance of rainfed and irrigated production systems and on the contribution of green and blue water to crop water satisfaction.
+
+<!-- The estimates are based on gross production value and therefore include the value of output jointly produced by water and other agricultural inputs. As a result, the estimates should not be interpreted as the value that would remain after subtracting the contribution of non-water inputs. -->
+
+{{< pagebreak >}}
+
+```{r}
+#| label: tbl-gep-country
+#| tbl-cap: "Country-level agricultural water-provisioning GEP in million USD by water source and production system in 2020"
+
+#/*--------------------------------*/
+#' ## Data preparation
+#/*--------------------------------*/
+gep_cols <- c(
+  "GEP_gn_rf",
+  "GEP_gn_ir",
+  "GEP_bl_irr"
+)
+
+gep_country_report <- 
+  fread(here("Data/Results/gep_agwater_country_source_2020.csv")) %>%
+  .[, n_gep_components := rowSums(!is.na(.SD)), .SDcols = gep_cols] %>%
+  .[n_gep_components == 0, total_gep := NA_real_] %>%
+  # Original GEP values are in thousand USD. To convert to million USD, divide by 10^3.
+  .[, `:=`(
+    Country = iso3_r250_name,
+    GEP_rain_rainfed_mil = GEP_gn_rf / 10^3,
+    GEP_rain_irrigated_mil = GEP_gn_ir / 10^3,
+    GEP_irr_irrigated_mil = GEP_bl_irr / 10^3,
+    Total_gep_mil = GEP_total / 10^3
+  )]
+
+
+#/*--------------------------------*/
+#' ## Create a Table
+#/*--------------------------------*/
+tg_cols <- c(
+  "GEP_rain_rainfed_mil",
+  "GEP_rain_irrigated_mil",
+  "GEP_irr_irrigated_mil",
+  "Total_gep_mil"
+)
+
+GEP_country_tbl <- 
+  copy(gep_country_report) %>%
+  .[order(-Total_gep_mil)] %>%
+  .[, c("Country", tg_cols), with = FALSE] %>%
+  flextable() %>%
+  set_header_labels(
+    Country = "Country",
+    GEP_rain_rainfed_mil = "Rainfed\ngreen",
+    GEP_rain_irrigated_mil = "Irrigated\ngreen",
+    GEP_irr_irrigated_mil = "Irrigated\nblue",
+    Total_gep_mil = "Total"
+  ) %>%
+  colformat_double(
+    j = tg_cols,
+    digits = 1,
+    big.mark = ",",
+    na_str = "NA"
+  ) %>%
+  align(j = "Country", align = "left", part = "all") %>%
+  align(
+    j = tg_cols,
+    align = "right",
+    part = "all"
+  ) %>%
+  fontsize(size = 8, part = "all") %>%
+  padding(padding = 2, part = "all") %>%
+  width(j = "Country", width = 1.3) %>%
+  width(
+    j = tg_cols,
+    width = 1
+  ) %>%
+  autofit()
+
+GEP_country_tbl
+```
+
+{{< pagebreak >}}
+
+
+# References
