@@ -1,0 +1,398 @@
+rainfed_value_tbl
+# Overview
+## Objective
++ To create a table of $GPV_{jr}^{rain}$ and $GPV_{jr}^{irr}$ for each crop $j$ and country $r$.
+
+## Data
++ FAOSTAT: Gross Production Value (GPV) by country and crop for the year 2019. Downloaded from [link](https://www.fao.org/faostat/en/#data/QV)
++ `spam_rainfed_share.csv`: A table of rainfed production share for each crop $j$ and country $r$ (created by `DataPrep/2-2-1-prep-spam.qmd`).
++ `s_jr_tbl.csv`: A table of $s_{rain, jr}$ for each crop $j$ and country $r$ (created by `DataPrep/2-1-lambda-calculation.qmd`).
+  + This contains the information on the area of winter wheat and spring wheat separately, which is needed to allocate the total wheat GPV between winter wheat and spring wheat.
+
+
+# NOTE:
++ For wheat, we need to split the total wheat GPV into winter wheat, spring wheat, and winter wheat full cover
++ For millet, we need to split the total millet GPV into pMillet and sMillet
+
+
+# Data preparation
+
+
+```{r}
+library(countrycode)
+
+#/*--------------------------------*/
+#' ## Spam-CropGBWater share data
+#/*--------------------------------*/
+spam_cropgbwater_jr <- fread(here("Data/Processed/spam_cropgbwater_share.csv"))
+
+#/*--------------------------------*/
+#' ## FAOSTAT GPV data
+#/*--------------------------------*/
+gpv_raw <- 
+  fread(here("Data/Raw/FAOSTAT/FAOSTAT_GPV_2020.csv")) %>%
+  .[, iso3 := countrycode(`Area Code (M49)`, origin = "un", destination = "iso3c", custom_match = c("159" = "CHN"))] %>%
+  # we keep only "China" and drop "China, mainland"
+  .[!(iso3 == "CHN" & `Area` == "China, mainland")]
+```
+
+
+# FAOSTAT-to-CropGBWater mapping
+
+```{r}
+# unique(gpv_raw$Item)
+# /*===== Correspondence table =====*/
+crop_gbwater_faostat_gpv_tbl <- 
+  fread(here("Data/Processed/CropGBWater_FAOSTAT_GPV_crop_correspondence.csv")) %>%
+  .[, .(CropGBWater_crop, FAOSTAT_Item)] %>%
+  unique()
+
+
+#/*--------------------------------*/
+#' ## Check correspondence table
+#/*--------------------------------*/
+missing_faostat_items <- 
+  setdiff(
+    unique(crop_gbwater_faostat_gpv_tbl$FAOSTAT_Item),
+    unique(gpv_raw$Item)
+  )
+
+if (length(missing_faostat_items) > 0) {
+  print(missing_faostat_items)
+  stop("Some FAOSTAT items in the correspondence table are not found in gpv_raw.")
+}
+
+# Identify FAOSTAT items mapped to multiple CropGBWater crops
+shared_faostat_items <- 
+  crop_gbwater_faostat_gpv_tbl[
+    ,
+    .(n_crop = uniqueN(CropGBWater_crop)),
+    by = FAOSTAT_Item
+  ][
+    n_crop > 1,
+    FAOSTAT_Item
+  ]
+
+shared_faostat_items
+# "Wheat" and "Millet"
+
+#/*--------------------------------*/
+#' ## Subset FAOSTAT GPV data to covered crops
+#/*--------------------------------*/
+gpv_item_tbl <- 
+  merge(
+    gpv_raw,
+    crop_gbwater_faostat_gpv_tbl,
+    by.x = "Item",
+    by.y = "FAOSTAT_Item",
+    all = FALSE
+  )
+
+#/*--------------------------------*/
+#' ## Direct GPV table
+#/*--------------------------------*/
+# This is valid for one-to-one and many-to-one mappings.
+# Example:
+# Oranges + lemons + other citrus -> Citrus
+gpv_direct_tbl <- 
+  gpv_item_tbl[
+    !Item %in% shared_faostat_items,
+    .(
+      GPV_total_jr = sum(as.numeric(Value), na.rm = TRUE),
+      FAOSTAT_area = paste(sort(unique(Area)), collapse = "; "),
+      FAOSTAT_items = paste(sort(unique(Item)), collapse = "; ")
+    ),
+    by = .(
+      CropGBWater_crop,
+      iso3
+    )
+  ][,GPV_unit := "1000 current US$"]
+
+#/*--------------------------------*/
+#' ## Shared FAOSTAT source GPV
+#/*--------------------------------*/
+# Important:
+# Use gpv_raw here, not gpv_item_tbl.
+# gpv_item_tbl already duplicates Wheat and Millet through the correspondence table.
+gpv_shared_source_tbl <- 
+  # gpv_raw[Item %in% shared_faostat_items,] %>%
+  gpv_raw[
+    Item %in% shared_faostat_items,
+    .(
+      GPV_source = sum(as.numeric(Value), na.rm = TRUE),
+      FAOSTAT_area = paste(sort(unique(Area)), collapse = "; ")
+    ),
+    by = .(
+      FAOSTAT_Item = Item,
+      iso3
+    )
+  ][,GPV_unit := "1000 current US$"]
+```
+
+# Allocate shared FAOSTAT GPV to CropGBWater crops based on SPAM production shares
+
+In this section, the goal is to allocate the shared FAOSTAT GPV for crops like "Wheat" and "Millet" to the corresponding CropGBWater crops (e.g., "Wheat_spring", "Wheat_winter", "pMillet", "sMillet") based on the production shares from SPAM.
+
++ 1. From `spam_cropgbwater_jr` and `shared_crop_map`, derive the total production quantity for each shared FAOSTAT item and country
+  + this serves as the denominator for allocating GPV for each CropGBWater crop
+
+
+```{r}
+#/*--------------------------------*/
+#' ## Allocate shared FAOSTAT GPV to CropGBWater crops
+#/*--------------------------------*/
+# Shared cases:
+# Wheat  -> Wheat_spring, Wheat_winter, Wheat_winter_fullcover
+# Millet -> pMillet, sMillet
+
+shared_crop_map <- 
+  crop_gbwater_faostat_gpv_tbl[FAOSTAT_Item %in% shared_faostat_items]
+
+shared_spam_prod <- 
+  merge(
+    spam_cropgbwater_jr,
+    shared_crop_map,
+    by = "CropGBWater_crop",
+    all = FALSE
+  )
+
+# Use SPAM production quantity to allocate FAOSTAT GPV across CropGBWater crops.
+# First, calculate the total production quantity for each shared FAOSTAT item and country (denominator for allocation)
+shared_spam_prod[,
+  Q_total_shared := sum(Q_total_for_share, na.rm = TRUE),
+  by = .(
+    iso3,
+    FAOSTAT_Item
+  )
+]
+
+# Then, calculate the allocation share for each CropGBWater crop
+shared_spam_prod[,
+  GPV_alloc_share := fifelse(
+    Q_total_shared > 0,
+    Q_total_for_share / Q_total_shared,
+    NA_real_
+  )
+]
+
+# Merge the allocation share with the shared FAOSTAT GPV source table to calculate the allocated GPV for each CropGBWater crop
+gpv_shared_alloc_tbl <- 
+  merge(
+    shared_spam_prod,
+    gpv_shared_source_tbl,
+    by = c("iso3", "FAOSTAT_Item"),
+    all.x = TRUE
+  ) %>%
+  .[,GPV_total_jr := GPV_source * GPV_alloc_share]
+
+
+gpv_shared_tbl <- 
+  gpv_shared_alloc_tbl[
+    ,
+    .(
+      CropGBWater_crop,
+      iso3,
+      GPV_total_jr,
+      FAOSTAT_area,
+      FAOSTAT_items = FAOSTAT_Item,
+      GPV_unit
+    )
+  ]
+
+# gpv_shared_source_tbl[iso3 == "AFG" & FAOSTAT_Item == "Millet"]
+```
+
+# Combine direct and shared GPV tables
+
+```{r}
+#/*--------------------------------*/
+#' ## Combine direct and shared GPV tables
+#/*--------------------------------*/
+gpv_total_cropgbwater_jr <- 
+  rbindlist(
+    list(
+      gpv_direct_tbl,
+      gpv_shared_tbl
+    ),
+    use.names = TRUE,
+    fill = TRUE
+  )
+
+#/*--------------------------------*/
+#' ## Check duplicated crop-country rows
+#/*--------------------------------*/
+dup_gpv_check <- 
+  gpv_total_cropgbwater_jr[, .N, by = .(CropGBWater_crop, iso3)] %>%
+  .[N > 1]
+
+if (nrow(dup_gpv_check) > 0) {
+  print(dup_gpv_check)
+  stop("Duplicated CropGBWater_crop-iso3 rows found in gpv_total_cropgbwater_jr.")
+}
+
+```
+
+# Calculate rainfed and irrigated GPV using SPAM production shares
+```{r}
+#/*--------------------------------*/
+#' ## Attach SPAM rainfed/irrigated production shares
+#/*--------------------------------*/
+spam_share_tbl <- copy(spam_cropgbwater_jr)
+
+if (!"Q_total_for_share" %in% names(spam_share_tbl)) {
+  spam_share_tbl[
+    ,
+    Q_total_for_share := Q_rain + Q_irr
+  ]
+}
+
+if (!"share_prod_rain" %in% names(spam_share_tbl)) {
+  spam_share_tbl[
+    ,
+    share_prod_rain := fifelse(
+      Q_total_for_share > 0,
+      Q_rain / Q_total_for_share,
+      NA_real_
+    )
+  ]
+}
+
+if (!"share_prod_irr" %in% names(spam_share_tbl)) {
+  spam_share_tbl[
+    ,
+    share_prod_irr := fifelse(
+      Q_total_for_share > 0,
+      Q_irr / Q_total_for_share,
+      NA_real_
+    )
+  ]
+}
+
+spam_share_tbl <- spam_share_tbl[,
+  .(
+    CropGBWater_crop,
+    iso3,
+    Q_rain,
+    Q_irr,
+    Q_total_for_share,
+    share_prod_rain,
+    share_prod_irr
+  )
+]
+
+#/*--------------------------------*/
+#' ## Calculate rainfed and irrigated GPV
+#/*--------------------------------*/
+gpv_cropgbwater_jr <- merge(
+  gpv_total_cropgbwater_jr,
+  spam_share_tbl,
+  by = c("CropGBWater_crop", "iso3"),
+  all.x = TRUE
+)
+
+gpv_cropgbwater_jr[,
+  `:=`(
+    GPV_rain_jr = GPV_total_jr * share_prod_rain,
+    GPV_irr_jr  = GPV_total_jr * share_prod_irr
+  )
+]
+
+gpv_cropgbwater_jr[,
+  GPV_check_diff := GPV_total_jr - (GPV_rain_jr + GPV_irr_jr)
+]
+
+#/*--------------------------------*/
+#' ## Diagnostics
+#/*--------------------------------*/
+# Check rows with GPV but missing SPAM production shares
+missing_share_check <- gpv_cropgbwater_jr[
+  GPV_total_jr > 0 &
+    (is.na(share_prod_rain) | is.na(share_prod_irr))
+]
+
+if (nrow(missing_share_check) > 0) {
+  warning("Some crop-country GPV rows have missing SPAM rainfed/irrigated production shares.")
+}
+
+# Check GPV decomposition
+gpv_decomp_check <- gpv_cropgbwater_jr[
+  GPV_total_jr > 0 &
+    !is.na(GPV_check_diff) &
+    abs(GPV_check_diff) > 1e-6
+]
+
+if (nrow(gpv_decomp_check) > 0) {
+  warning("Some crop-country rows do not satisfy GPV_total = GPV_rain + GPV_irr.")
+}
+```
+
+# Add a status variable to describe why GPV_irr_jr and GPV_rain_jr are missing for some rows
+
+```{r}
+#/*--------------------------------*/
+#' ## Record why rainfed/irrigated GPV is missing
+#/*--------------------------------*/
+
+gpv_cropgbwater_jr[
+  ,
+  GPV_split_status := fcase(
+    GPV_total_jr > 0 &
+      is.na(Q_total_for_share),
+    "missing_SPAM_row",
+
+    GPV_total_jr > 0 &
+      !is.na(Q_total_for_share) &
+      Q_total_for_share == 0,
+    "zero_SPAM_production",
+
+    GPV_total_jr > 0 &
+      !is.na(share_prod_rain) &
+      !is.na(share_prod_irr),
+    "split_available",
+
+    GPV_total_jr == 0,
+    "zero_GPV",
+
+    default = "other"
+  )
+]
+
+gpv_cropgbwater_jr[
+  ,
+  GPV_split_note := fcase(
+    GPV_split_status == "missing_SPAM_row",
+    "FAOSTAT reports positive GPV, but no matching SPAM production-share row is available for this CropGBWater crop-country pair.",
+
+    GPV_split_status == "zero_SPAM_production",
+    "FAOSTAT reports positive GPV, but SPAM reports zero rainfed and irrigated production; rainfed/irrigated shares are undefined.",
+
+    GPV_split_status == "split_available",
+    "Rainfed and irrigated GPV are calculated using SPAM rainfed/irrigated production shares.",
+
+    GPV_split_status == "zero_GPV",
+    "FAOSTAT GPV is zero.",
+
+    default = "Other unresolved case."
+  )
+]
+
+gpv_cropgbwater_jr[
+  GPV_split_status %in% c("missing_SPAM_row", "zero_SPAM_production"),
+  `:=`(
+    GPV_rain_jr = NA_real_,
+    GPV_irr_jr  = NA_real_
+  )
+]
+```
+
+# Save the final table
+
+```{r}
+#/*--------------------------------*/
+#' ## Save output
+#/*--------------------------------*/
+fwrite(
+  gpv_cropgbwater_jr,
+  here("Data/Processed/GPV_rainfed_irrigated_CropGBWater_2020.csv")
+)
+```

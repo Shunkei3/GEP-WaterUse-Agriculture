@@ -1,0 +1,80 @@
+---
+title: "Createing parameter table"
+---
+
+# Overview
+## Objectives
++ To identify the which crops to be included in the analysis
++ Create a table that contains:
+  + crop name of MIRCA-OS dataset
+  + crop name of FAO report
+  + parameter values (Ky, Kc) for each crop
+
+## CROPWAT crop-parameter table
+
+```{r}
+# --- Load packages --- #
+library(CropWat)
+
+cp <- 
+  load_crop_params() %>%
+  data.table() # 55 crops
+
+# --- Save --- #
+fwrite(cp, here("Data/Raw/CropWat_crop_params_raw.csv"))
+```
+
+## Crops in CropGBWater dataset
+
+```{r}
+#/*--------------------------------*/
+#' ## Explore which crops are covered in the dataset
+#/*--------------------------------*/
+ls_data_files <- 
+  list.files(
+    here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded"),
+    full.names = FALSE,
+    pattern = "grid_avg.csv"
+  )
+
+
+ls_crops <-
+  stringr::str_remove(ls_data_files, "Data_S5_Y2020_") %>%
+  stringr::str_remove("_grid_avg.csv") %>%
+  sort()
+
+
+wheat_dt <- fread(here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded/Data_S5_Y2020_Wheat_grid_avg.csv"))
+```
+
+
+# Constructing the crop-parameter table
+
+We manually created a correspondence table between CropGBWater crop classes and FAO/CROPWAT crop classes. The file name is `CropGBWater_CROPWAT_correspondence.csv`. Then, we merge the crop correspondence table with the CROPWAT crop-parameter table to create a final crop-parameter table.
+
+
+
+
+```{r}
+crop_tbl <- fread("Data/Raw/CropGBWater_CROPWAT_correspondence.csv")
+
+cropwat_tbl <- fread("Data/Raw/CropWat_crop_params_raw.csv")
+
+
+# --- Merge --- #
+Ky_Kc_tbl <- 
+  merge(
+    crop_tbl, cropwat_tbl, all.x = TRUE, by.x = "FAO_crop", by.y = "crop"
+  ) %>%
+  setnames(
+    c("name", "Ytot"),
+    c("FAO_crop_name,", "Ky")
+  )
+
+# --- Save --- #
+fwrite(Ky_Kc_tbl, here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv"))
+```
+
+
+
+

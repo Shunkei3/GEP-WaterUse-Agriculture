@@ -1,0 +1,358 @@
+# Overview
+## Objectives
+For irrigated crops,:
+
++ construct daily crop water requirements (ETm_{jgtd}= Kc_{jh} * ET0_{gtd}), then aggregate ETm to crop-grid-month-stage
++ Allocate monthly CropGBWawter water consumption to stages
+  + WCgc_{irr, jgm}: green water consumption on irrigated land
+  + WCbl_{irr, jgm}: blue water consumption on irrigated land
+
+## NOTE:
++ Crop-stage ETm is constructed using a representative 365-day daily ET0 profile averaged over 2018–2022. For growing seasons crossing December 31, days after year-end are mapped to the corresponding early-year day-of-year in the representative profile.
+
+# Data loading
+
+```{r}
+# --- Load functions --- #
+library(countrycode)
+source(here("Scr/Agriculture/2-Irr_Code/DataPrep/0-functions-dataprep.R"))
+
+# --- Suppress messages from data.table --- #
+options(datatable.showProgress = FALSE)
+options(datatable.verbose = FALSE)
+
+# --- Crop Kc Ky Table --- #
+crop_param_dt <- fread(here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv"))
+
+crop_param_long <- 
+  crop_param_dt[,.(FAO_crop, CropGBWater_crop, crop_name, Yini, Ydev, Ymid, Yend)] %>%
+  melt(
+    id.vars = c("CropGBWater_crop", "FAO_crop", "crop_name"),
+    measure.vars = patterns("^Y"),
+    variable.name = "stage",
+    value.name = "Ky"
+  ) %>%
+  .[, stage:= fcase(
+    stage == "Yini", "ini",
+    stage == "Ydev", "dev",
+    stage == "Ymid", "mid",
+    stage == "Yend", "late",
+    default = NA_character_
+  )]
+
+ls_crops <- crop_param_dt$CropGBWater_crop
+
+# --- Daily ET0 data --- #
+et0_daily_dt <- fread(here("Data/Processed/CropGBWater/et0_daily_avg_2020.csv"))
+```
+
+
+# Function to calculate lambda for a given crop
+
+```{r}
+get_lambda <- function(crop_i){
+  #/*--------------------------------*/
+  #' ## Test Run
+  # crop_i = ls_crops[1]
+  # crop_i = "Banana" 
+  # crop_i = "Cowpea"
+  #/*--------------------------------*/
+
+  message("Calculating lambda for crop: ", crop_i)
+
+  # --- load wc data --- #
+  wc_dt_crop_i <- fread(here("Data/Processed/CropGBWater/wc", paste0(crop_i, "_grid_avg.csv")))
+
+  #/*--------------------------------*/
+  #' ## Step 1: Calculate ETm_{jgtd}
+  #/*--------------------------------*/
+  # Crop water requirement accumulated over that month-stage portion
+  etm_month_stage <- get_etm_month_stage(wc_dt_crop_i, et0_daily_dt)
+   
+  #/*--------------------------------*/
+  #' ## Step 2: Allocate monthly CropGBWawter water consumption to stages
+  #/*--------------------------------*/
+  # (j, g, m, h) level
+  wc_month_stage <- get_wc_month_stage(wc_dt_crop_i, etm_month_stage)
+
+  # wc_month_stage[ClimateID == 212972]
+
+  #/*--------------------------------*/
+  #' ## Step 3: Convert mm to volume
+  #/*--------------------------------*/
+  # (j, g, m, h) level
+  wc_month_stage_volume <- get_wc_stage_volume(wc_month_stage)
+
+  #' + ETm_rf_stage_m3
+  #' + ETm_ir_stage_m3
+  #' + WC_bl_stage_m3
+  #' + WC_gn_rf_stage_m3
+  #' + WC_gn_ir_stage_m3 
+   
+  #/*--------------------------------*/
+  #' ## Step 4: Aggregate grid-month-stage to grid-stage
+  #/*--------------------------------*/
+  # (j, r, h) level
+  wc_stage_volume <-
+    wc_month_stage_volume[,
+    .(
+      ETm_rf_jrgh_m3   = sum(ETm_rf_stage_m3, na.rm = TRUE),
+      ETm_ir_jrgh_m3   = sum(ETm_ir_stage_m3, na.rm = TRUE),
+      
+      WC_gn_rf_jrgh_m3 = sum(WC_gn_rf_stage_m3, na.rm = TRUE),
+      WC_gn_ir_jrgh_m3 = sum(WC_gn_ir_stage_m3, na.rm = TRUE),
+      WC_bl_jrgh_m3    = sum(WC_bl_stage_m3, na.rm = TRUE),
+      
+      n_month_stage_records = .N,
+      months_in_stage = paste(sort(unique(month_name)), collapse = ", ")
+    ),
+    by = c("ADM0_NAME", "grid_code", "ClimateID", "stage", "crosses_multiple_years")
+  ]
+  
+  #/*--------------------------------*/
+  #' ## Step 5: s_jrgmh calculation
+  #/*--------------------------------*/
+  # (j, g, h) level
+  # For each grid-month-stage, calculate water satisfaction ratio for rainfed and irrigated land separately
+  s_jgmh_tbl <- get_s_jrgh(wc_stage_volume)
+
+  # --- check --- #
+  # s_jgmh_tbl[!is.na(s_total_ir_check)]
+ 
+  #/*--------------------------------*/
+  #' ## Step 6: s_jrh calculation
+  #/*--------------------------------*/
+  # water satisfaction ratio for each crop-grid-month-stage
+  s_jrh_tbl <- get_s_jrh(s_jgmh_tbl)
+
+  # The kye outputs are:
+  #' + s_gn_rf_jrh: green water satisfaction on rainfed land
+  #' + s_gn_ir_jrh: green water satisfaction on irrigated land
+  #' + s_bl_jrh: blue water satisfaction on irrigated land
+  #' + s_total_ir_jrh: total water satisfaction on irrigated land (including both green and blue water)
+ 
+  #/*--------------------------------*/
+  #' ## Step 7: lambda calculation
+  #/*--------------------------------*/
+  # water satisfaction ratio for each crop-country
+
+  # The key outputs are:
+  #' + lambda_gn_rf: lambda for green water on rainfed land
+  #' + lambda_gn_ir: lambda for green water on irrigated land
+  #' + lambda_bl_ir: lambda for blue water on irrigated land
+  #' + lambda_total_ir: lambda for total water on irrigated land (including both green
+  crop_param_crop_i <- crop_param_long[CropGBWater_crop == crop_i]
+
+  s_jrh_ky_tbl <- merge(s_jrh_tbl, crop_param_crop_i, by = "stage", all.x = TRUE)
+
+  if (nrow(s_jrh_ky_tbl) != nrow(s_jrh_tbl)) {
+    stop("Merge expanded or reduced rows for crop: ", crop_i)
+  }
+
+  if (s_jrh_ky_tbl[is.na(Ky), .N] > 0) {
+    warning("Some stage rows do not have matched Ky values.")
+  }
+
+  lambda_jr_tbl <- 
+    s_jrh_ky_tbl[,
+      .(
+        lambda_gn_rf = calc_lambda(s_gn_rf_jrh, Ky),
+        lambda_gn_ir = calc_lambda(s_gn_ir_jrh, Ky),
+        lambda_bl_ir = calc_lambda(s_bl_ir_jrh, Ky),
+        lambda_total_ir = calc_lambda(s_total_ir_jrh, Ky),
+
+        n_stage = uniqueN(stage),
+        n_stage_with_Ky = sum(!is.na(Ky))
+      ),
+      by = .(
+        ADM0_NAME,
+        CropGBWater_crop,
+        FAO_crop,
+        crop_name
+      )
+    ]
+
+  lambda_jr_tbl[,
+    lambda_total_ir_check := lambda_gn_ir + lambda_bl_ir
+  ][,
+    lambda_total_ir_diff := lambda_total_ir - lambda_total_ir_check
+  ]
+
+  #/*--------------------------------*/
+  #' ## Add some information
+  #/*--------------------------------*/
+  area_A_col <- grep("_A$", names(wc_month_stage), value = TRUE)
+  area_I_col <- grep("_I$", names(wc_month_stage), value = TRUE)
+  area_R_col <- grep("_R$", names(wc_month_stage), value = TRUE)
+
+
+  keep_dt_grid <-
+    wc_month_stage[,
+      .(
+        ADM0_NAME,
+        grid_code,
+        ClimateID,
+        area_ha_A = get(area_A_col),
+        area_ha_I = get(area_I_col),
+        area_ha_R = get(area_R_col),    
+        crosses_multiple_years
+      )
+    ] %>%
+    unique(., by = c("ADM0_NAME", "grid_code"))
+
+  keep_dt <- keep_dt_grid[,
+    .(
+      area_ha_A = sum(area_ha_A, na.rm = TRUE),
+      area_ha_I = sum(area_ha_I, na.rm = TRUE),
+      area_ha_R = sum(area_ha_R, na.rm = TRUE),
+      
+      n_grid = uniqueN(grid_code),
+      n_ClimateID = uniqueN(ClimateID),
+      
+      any_crosses_multiple_years = any(crosses_multiple_years, na.rm = TRUE),
+      
+      area_ha_A_cross_year = sum(fifelse(crosses_multiple_years, area_ha_A, 0), na.rm = TRUE),
+      area_ha_I_cross_year = sum(fifelse(crosses_multiple_years, area_ha_I, 0), na.rm = TRUE),
+      area_ha_R_cross_year = sum(fifelse(crosses_multiple_years, area_ha_R, 0), na.rm = TRUE)
+    ),
+    by = .(ADM0_NAME)
+  ]
+
+  if (keep_dt[, anyDuplicated(ADM0_NAME)] > 0) {
+    stop("Duplicate ADM0_NAME found in keep_dt for crop: ", crop_i)
+  }
+
+  # nrow(keep_dt) == nrow(lambda_jr_tbl) 
+
+  lambda_jr_tbl_out <- merge(
+    lambda_jr_tbl,
+    keep_dt,
+    by = "ADM0_NAME",
+    all.x = TRUE
+  )
+
+  return(lambda_jr_tbl_out[])
+}
+
+
+# lambda_jr_tbl_maize <- get_lambda("Maize")
+# lambda_jr_tbl_maize[ADM0_NAME %like% "United States", .(lambda_gn_rf, lambda_gn_ir, lambda_bl_ir, lambda_total_ir)]
+
+# summary(lambda_jr_tbl_maize$lambda_gn_rf)
+# summary(lambda_jr_tbl_maize$lambda_gn_ir)
+# summary(lambda_jr_tbl_maize$lambda_bl_ir)
+# summary(lambda_jr_tbl_maize$lambda_total_ir)
+
+
+safe_get_lambda <- function(crop_i){
+  warnings_i <- character()
+
+  out <- tryCatch(
+    withCallingHandlers(
+      {
+        lambda_i <- get_lambda(crop_i)
+
+        lambda_i[
+          ,
+          requested_crop := crop_i
+        ]
+
+        list(
+          success = TRUE,
+          crop = crop_i,
+          result = lambda_i,
+          error = NA_character_,
+          warnings = warnings_i
+        )
+      },
+      warning = function(w){
+        warnings_i <<- c(warnings_i, conditionMessage(w))
+        invokeRestart("muffleWarning")
+      }
+    ),
+    error = function(e){
+      list(
+        success = FALSE,
+        crop = crop_i,
+        result = NULL,
+        error = conditionMessage(e),
+        warnings = warnings_i
+      )
+    }
+  )
+
+  return(out)
+}
+```
+
+
+# Run the function for all crops and combine results
+
+
+```{r}
+library(parallel)
+
+lambda_results <- 
+  mclapply(
+    ls_crops,
+    safe_get_lambda,
+    mc.cores = 12
+  )
+
+# /*===== Error Table =====*/
+lambda_error_tbl <- 
+  rbindlist(
+    lapply(lambda_results, function(x){
+      if (!x$success) {
+        data.table(
+          crop = x$crop,
+          error = x$error,
+          warnings = paste(x$warnings, collapse = " | ")
+        )
+      } else {
+        NULL
+      }
+    }),
+    fill = TRUE
+  )
+
+lambda_warning_tbl <- 
+  rbindlist(
+    lapply(lambda_results, function(x){
+      if (length(x$warnings) > 0) {
+        data.table(
+          crop = x$crop,
+          warnings = paste(x$warnings, collapse = " | ")
+        )
+      } else {
+        NULL
+      }
+    }),
+    fill = TRUE
+  )
+
+# /*===== Results =====*/
+lambda_jr_tbl <- 
+  rbindlist(
+    lapply(lambda_results, function(x){
+      if (x$success) {
+        x$result
+      } else {
+        NULL
+      }
+    }),
+    fill = TRUE
+  ) %>%
+  .[, iso3 := countrycode(ADM0_NAME, origin = "country.name", destination = "iso3c")]
+
+# setdiff(ls_crops, lambda_jr_tbl$CropGBWater_crop)
+
+# lambda_jr_tbl[iso3 == "USA", .(CropGBWater_crop, lambda_gn_rf, lambda_gn_ir, lambda_bl_ir, lambda_total_ir)]
+
+
+# /*===== Save =====*/
+fwrite(
+  lambda_jr_tbl,
+  here("Data/Processed/lambda_jr_tbl_CropGBWater.csv")
+)
+```

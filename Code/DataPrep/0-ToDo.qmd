@@ -1,0 +1,71 @@
+# CropGBWater
+
++ (crop)_A: crop's total area in ha
++ (crop)_I: irrigated area in ha
++ (crop)_R: rainfed area in ha
+
++ cwu
+
+# Data Preparation
+
+[-] Kc-Ky table  
+
+[-] ET0 data:
+  + tabular format 
+  + ClimateID, doy, ET0
+  + Note that ET0 is a five-year average daily ET0 profile for each climate grid, because CropGBWater's water-consumption data are averaged outputs.
+
+[-] Crop calendar and water consumption data for each crop
+
+
+# NOTE:
++ Some crops that are planted in the late growing season, such as winter wheat, may have their growing season spanning two calendar years. 
+
+We made a major revision to our GEP calculation approach for the agriculture sector. We finished the write up, and we will share the revised document with you after this meeting. 
+
+In this meeting, we want to briefly explain the key conceptual shift in our approach and the conceptual framework for calculating λ.
+
+
+# Key conceptual shift:
+
+There are couple of problems in our previous approach.
+
+The major problem was that we assumed that the lambda value for rainfed crop land is simply 1, in other words, the value of rainfed crop production is fully attributed to green water. 
+
+Also, we disregarded the contribution of precipitation to irrigated crop production. Given that irrigation is often used to supplement precipitation, precipitation on irrigated land can also contribute to crop production.
+
+
+To address these problems, we decided to separate agricultural water provisioning into three components: green water on rainfed land, green water on irrigated land, and blue water on irrigated land, and calculate the GEP for each of these three components separately.
+
+Originally, we calculated the GEP for each country and each crop, and then aggregated them to the country level.
+
+$\lmabda$ is the nature contribution factor. As I explain later, we construct each $\lmabda$ from crop water stisfaction during the growing season, weighted by crop growth state-specific sensitivity of crop yield to water stress. These $\lambda$ measures how much the ecosystem water provisioning, through green and blue water, supported crop production by reducing yield-relevant water stress.
+
+
+# Conceptual framework for lambda calculation
+
+For attribution rule, we use the crop-water production function as desciribed in the following equation: 
+
+
+Ya is the actual yield and Ym is the maximum yield that can be achieved when crop water requirements are fully satisfied at all growth stages.
+
+The left-hand side of the equation, (1 - Y_a/Y_m), is the proportional yield reduction relative to this water-unconstrained maximum yield. 
+
+The right-hand side represents this yield reduction as the sum of stage-specific water deficits, weighted by the crop’s sensitivity to water stress in each growth stage.
+
+
+# Conceptual Framework for constructing λ for each crop and country
+
+Given the crop-water production function, we construct λ for each crop and country by comparing the magnitude of water stress on crop yield with and without nature's water provisioning.
+
+The key logic is like this. 
+
+Water provisioning service alleviated the full impact of water stress on crop yield by providing water to crops. 
+
+Then, to what extent did nature's water provisioning alleviated water stress and supported crop production compared to the crop production under the full water stress? This is what $\lambda$ measures.
+
+If $\lambda$ is 0.6, for example, it means that nature's water provisioning avoided 60% of the maximum stage-weighted water-stress yield loss that would occur if crop water requirements were not satisfied at any growth stage.
+
+So, 60% of the yield should be attributed to nature's water provisioning. 
+
+

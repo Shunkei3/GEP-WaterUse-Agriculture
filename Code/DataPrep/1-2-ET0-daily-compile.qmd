@@ -1,0 +1,131 @@
+# Overview
+## Objective
++ To process the CropGBWater ET0 data
+
+## Data
++ The data is from CropGBWater, Data_S13
+  + The unit is mm/day, 
+
+
+```{r}
+library(lubridate)
+```
+
+
+# Test Run
+```{r}
+#/*--------------------------------*/
+#' ## Test run (Don't run)
+#/*--------------------------------*/
+eto_file <- here("Data/Raw/CropGBWater/ETo/PET_1000071.ETO")
+
+eto_dt <- fread(
+  eto_file,
+  skip = 8,
+  header = FALSE,
+  col.names = "ET0"
+)
+
+eto_dt[, ClimateID := 1000071]
+eto_dt[, date := as.Date("2018-01-01") + 0:(.N - 1)]
+eto_dt[, year := year(date)]
+eto_dt[, doy := yday(date)]
+
+setcolorder(eto_dt, c("ClimateID", "date", "year", "doy", "ET0"))
+
+eto_dt
+
+
+eto_dt[
+  , is_feb29 := month(date) == 2 & mday(date) == 29
+]
+
+eto_dt[
+  , doy365 := yday(date) - fifelse(leap_year(date) & yday(date) > 60, 1L, 0L)
+]
+
+eto_365_dt <- eto_dt[
+  is_feb29 == FALSE,
+  .(ET0 = mean(ET0, na.rm = TRUE)),
+  by = .(ClimateID, doy = doy365)
+]
+
+eto_365_dt[]
+
+eto_365_dt[, .N, by = ClimateID]
+```
+
+# Load all files and process them
+
+```{r}
+#/*--------------------------------*/
+#' ## Functions
+#/*--------------------------------*/
+read_eto_file <- function(path) {
+  # path = files_et0[1]
+  
+  climate_id <- basename(path) |>
+    sub("^PET_", "", x = _) |>
+    sub("\\.ETO$", "", x = _) |>
+    as.integer()
+  
+  dt <- fread(
+    path,
+    skip = 8,
+    header = FALSE,
+    col.names = "ET0"
+  )
+  
+  dt[, ClimateID := climate_id]
+  dt[, date := as.Date("2018-01-01") + 0:(.N - 1)]
+  dt[, year := year(date)]
+  dt[, doy := yday(date)]
+  dt[, is_feb29 := month(date) == 2 & mday(date) == 29]
+  dt[, doy365 := yday(date) - fifelse(leap_year(date) & yday(date) > 60, 1L, 0L)]
+  
+  return(dt[])
+}
+
+
+#/*--------------------------------*/
+#' ## Process
+#/*--------------------------------*/
+files_et0 <- list.files(
+  here("Data/Raw/CropGBWater/ETo"),
+  pattern = "\\.ETO$",
+  full.names = TRUE
+)
+
+# length(files_et0) # 361322
+library(parallel)
+
+eto_all_dt <- 
+  rbindlist(
+    mclapply(files_et0, read_eto_file, mc.cores = 10),
+    use.names = TRUE
+  )
+
+fwrite(eto_all_dt, here("Data/Processed/CropGBWater/et0_daily_2018_2022.csv"))
+```
+
+
+Then, create a five-year average daily ET0 profile for each climate grid, because CropGBWater's water-consumption data are averaged outputs.
+
+```{r}
+#/*--------------------------------*/
+#' ## Create 
+#/*--------------------------------*/
+eto_365_dt <- eto_all_dt[
+  is_feb29 == FALSE,
+  .(ET0 = mean(ET0, na.rm = TRUE)),
+  by = .(ClimateID, doy = doy365)
+]
+
+setorder(eto_365_dt, ClimateID, doy)
+
+# --- Check --- #
+eto_365_dt[, .N, by = ClimateID][N != 365]
+
+fwrite(eto_365_dt, here("Data/Processed/CropGBWater/et0_daily_avg_2020.csv"))
+```
+

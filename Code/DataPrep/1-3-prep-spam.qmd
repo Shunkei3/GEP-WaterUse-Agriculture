@@ -1,0 +1,329 @@
+# Overview
+## Objectives
++ For each crop $j$ and country $r$, create a table that contains:
+  + $Q^{rain}_{jr}$: rainfed production quantity for each crop $j$ and country $r$.
+  + $Q^{irr}_{jr}$: irrigated production quantity for each crop $j$ and country $r$.
+  + $Q^{total}_{jr}$: total production quantity for each crop $j$ and country $r$.
++ Then, calculate the rainfed production share for each crop $j$ and country $r$ as follows:
+
+$$
+\text{Rainfed production share}_{jr} = \frac{Q^{rain}_{jr}}{Q^{total}_{jr}}
+$$
+
+## Data
++ SPAM 2020 v2.2 global production dataset for 2020. Downloaded from [link](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/SWPENT).
+  + The unit is kg/ha
+
+
+# Load data
+```{r}
+library(countrycode)
+source(here("Scr/Agriculture/2-Irr_Code/DataPrep/0-functions-dataprep.R"))
+
+# /*===== CropGBWater crop and SPAM crops correspondence =====*/
+crop_gbwater_spam_tbl <- fread(here("Data/Raw/CropGBWater_SPAM_crop_correspondence.csv"))
+
+#/*--------------------------------*/
+#' ## SPAM 2020 data
+#/*--------------------------------*/
+spam_2020_total_raw <- 
+  fread(here("Data/Raw/SPAM/2020/spam2020V2r2_global_P_TA.csv")) %>%
+  .[, iso3 := countrycode(ADM0_NAME, origin = "country.name", destination = "iso3c")]
+
+spam_2020_rain_raw <- 
+  fread(here("Data/Raw/SPAM/2020//spam2020V2r2_global_P_TR.csv")) %>%
+  .[, iso3 := countrycode(ADM0_NAME, origin = "country.name", destination = "iso3c")]
+
+spam_2020_irr_raw  <- 
+  fread(here("Data/Raw/SPAM/2020//spam2020V2r2_global_P_TI.csv")) %>%
+  .[, iso3 := countrycode(ADM0_NAME, origin = "country.name", destination = "iso3c")]
+
+#/*--------------------------------*/
+#' ## CropGBWater Wheat variants
+#/*--------------------------------*/
+# ls_cols <- c("grid_code", "ADM0_NAME", "WHEA_A", "WHEA_I", "WHEA_R", "wheat_class", "WHEA_A")
+ls_cols <- c("ADM0_NAME", "WHEA_A", "WHEA_I", "WHEA_R")
+
+Wheat_spring_grid_avg <- 
+  fread(here("Data/Processed/CropGBWater/wc/Wheat_spring_grid_avg.csv")) %>%
+  .[, ..ls_cols] %>%
+  .[, CropGBWater_crop := "Wheat_spring"]
+
+Wheat_winter_grid_avg <-
+  fread(here("Data/Processed/CropGBWater/wc/Wheat_winter_grid_avg.csv")) %>%
+  .[, ..ls_cols] %>%
+  .[, CropGBWater_crop := "Wheat_winter"]
+
+Wheat_winter_fullcover_grid_avg <-
+  fread(here("Data/Processed/CropGBWater/wc/Wheat_winter_fullcover_grid_avg.csv")) %>%
+  .[, ..ls_cols] %>%
+  .[, CropGBWater_crop := "Wheat_winter_fullcover"]
+
+
+Wheat_grid_avg <- rbindlist(
+  list(
+    Wheat_spring_grid_avg,
+    Wheat_winter_grid_avg,
+    Wheat_winter_fullcover_grid_avg
+  ),
+  use.names = TRUE,
+  fill = TRUE
+)
+```
+
+
+## For wheat, calculate the share of each variant by technology type (irrigated, rainfed, total) for each country
+
+
+```{r}
+wheat_area_jr <- 
+  Wheat_grid_avg[,
+    .(
+      wheat_area_total_ha = sum(WHEA_A, na.rm = TRUE),
+      wheat_area_irr_ha   = sum(WHEA_I, na.rm = TRUE),
+      wheat_area_rf_ha    = sum(WHEA_R, na.rm = TRUE)
+    ),
+    by = .(ADM0_NAME, CropGBWater_crop)
+  ]
+
+# Calculate the total wheat area for each country (denominator)
+wheat_area_jr[
+  ,
+  `:=`(
+    wheat_area_total_all_ha = sum(wheat_area_total_ha, na.rm = TRUE),
+    wheat_area_irr_all_ha   = sum(wheat_area_irr_ha, na.rm = TRUE),
+    wheat_area_rf_all_ha    = sum(wheat_area_rf_ha, na.rm = TRUE)
+  ),
+  by = ADM0_NAME
+]
+
+
+# Then, calculate the share of each wheat variant by technology type for each country
+wheat_area_jr[
+  ,
+  `:=`(
+    wheat_share_total_area = fifelse(
+      wheat_area_total_all_ha > 0,
+      wheat_area_total_ha / wheat_area_total_all_ha,
+      NA_real_
+    ),
+    wheat_share_irr_area = fifelse(
+      wheat_area_irr_all_ha > 0,
+      wheat_area_irr_ha / wheat_area_irr_all_ha,
+      NA_real_
+    ),
+    wheat_share_rf_area = fifelse(
+      wheat_area_rf_all_ha > 0,
+      wheat_area_rf_ha / wheat_area_rf_all_ha,
+      NA_real_
+    )
+  )
+]
+```
+
+## Derive country-level rainfed and irrigated production quantity
+
+```{r}
+ls_spam_crops <- unique(crop_gbwater_spam_tbl$SPAM_crop)
+id_cols <- c("iso3", "ADM0_NAME")
+
+spam_total_country <- 
+  spam_2020_total_raw[,
+    lapply(.SD, sum, na.rm = TRUE),
+    by = .(iso3, ADM0_NAME),
+    .SDcols = ls_spam_crops
+  ] %>%
+  melt(
+    id.vars = id_cols,
+    variable.name = "SPAM_crop",
+    value.name = "Q_total"
+  )
+
+spam_rain_country <- 
+  spam_2020_rain_raw[,
+    lapply(.SD, sum, na.rm = TRUE),
+    by = .(iso3, ADM0_NAME),
+    .SDcols = ls_spam_crops
+  ] %>%
+  melt(
+    id.vars = id_cols,
+    variable.name = "SPAM_crop",
+    value.name = "Q_rain"
+  )
+
+spam_irr_country <-
+  spam_2020_irr_raw[,
+    lapply(.SD, sum, na.rm = TRUE),
+    by = .(iso3, ADM0_NAME),
+    .SDcols = ls_spam_crops
+  ] %>%
+  melt(
+    id.vars = id_cols,
+    variable.name = "SPAM_crop",
+    value.name = "Q_irr"
+  )
+
+
+#/*--------------------------------*/
+#' ## Combine
+#/*--------------------------------*/
+spam_country_crop <- Reduce(
+  function(x, y) {
+    merge(
+      x,
+      y,
+      by = c("iso3", "ADM0_NAME", "SPAM_crop"),
+      all = TRUE
+    )
+  },
+  list(
+    spam_total_country,
+    spam_rain_country,
+    spam_irr_country
+  )
+)
+
+spam_country_crop[
+  ,
+  `:=`(
+    Q_total = fifelse(is.na(Q_total), 0, Q_total),
+    Q_rain  = fifelse(is.na(Q_rain),  0, Q_rain),
+    Q_irr   = fifelse(is.na(Q_irr),   0, Q_irr)
+  )
+]
+```
+
+## Direct mapping for non-wheat crops
+
+
+```{r}
+crop_gbwater_spam_nonwheat <- crop_gbwater_spam_tbl[SPAM_crop != "whea"]
+
+spam_nonwheat_jr <- 
+  merge(
+    crop_gbwater_spam_nonwheat,
+    spam_country_crop[SPAM_crop != "whea"],
+    by = "SPAM_crop",
+    all.x = TRUE,
+    allow.cartesian = TRUE
+  )
+
+spam_nonwheat_jr <- 
+  spam_nonwheat_jr[,
+    .(
+      iso3,
+      ADM0_NAME,
+      CropGBWater_crop,
+      SPAM_crop,
+      Q_rain,
+      Q_irr,
+      Q_total
+    )
+  ]
+```
+
+
+## Split aggregate SPAM wheat into your three wheat variants
+```{r}
+# This is country-level aggreated wheat production quantity
+spam_wheat_jr <- 
+  spam_country_crop[
+    SPAM_crop == "whea",
+    .(
+      iso3,
+      ADM0_NAME,
+      SPAM_crop,
+      Q_rain_whea  = Q_rain,
+      Q_irr_whea   = Q_irr,
+      Q_total_whea = Q_total
+    )
+  ]
+
+wheat_split_jr <- 
+  merge(
+    wheat_area_jr,
+    spam_wheat_jr,
+    by = "ADM0_NAME",
+    all.x = TRUE
+  )
+
+wheat_split_jr[,
+  `:=`(
+    Q_rain = fifelse(
+      !is.na(wheat_share_rf_area),
+      wheat_share_rf_area * Q_rain_whea,
+      0
+    ),
+    Q_irr = fifelse(
+      !is.na(wheat_share_irr_area),
+      wheat_share_irr_area * Q_irr_whea,
+      0
+    )
+  )
+]
+
+wheat_split_jr[, Q_total := Q_rain + Q_irr]
+
+spam_wheat_variant_jr <- 
+  wheat_split_jr[,
+    .(
+      iso3,
+      ADM0_NAME,
+      CropGBWater_crop,
+      SPAM_crop = "whea",
+      Q_rain,
+      Q_irr,
+      Q_total
+    )
+  ]
+```
+
+## Combine wheat and non-wheat data
+
+
+```{r}
+spam_cropgbwater_jr <- 
+  rbindlist(
+    list(
+      spam_nonwheat_jr,
+      spam_wheat_variant_jr
+    ),
+    use.names = TRUE,
+    fill = TRUE
+  )
+```
+
+## Calculate production share
+
+```{r}
+spam_cropgbwater_jr[,
+  Q_total_for_share := Q_rain + Q_irr
+]
+
+spam_cropgbwater_jr[,
+  `:=`(
+    share_prod_rain = fifelse(
+      Q_total_for_share > 0,
+      Q_rain / Q_total_for_share,
+      NA_real_
+    ),
+    share_prod_irr = fifelse(
+      Q_total_for_share > 0,
+      Q_irr / Q_total_for_share,
+      NA_real_
+    )
+  )
+]
+
+spam_cropgbwater_jr[,
+  share_prod_check := share_prod_rain + share_prod_irr
+]
+
+
+# === Save === #
+fwrite(
+  spam_cropgbwater_jr,
+  here("Data/Processed/spam_cropgbwater_share.csv")
+)
+```
+

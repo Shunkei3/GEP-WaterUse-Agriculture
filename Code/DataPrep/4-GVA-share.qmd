@@ -1,0 +1,615 @@
+# Overview
+## Objectives
++ to estimate $GVA^{rain}_{jr}$ and $GVA^{irr}_{jr}$ for each crop $j$ and country $r$ from $GPV^{rain}_{jr}$ and $GPV^{irr}_{jr}$.
+
+
+# Data
++ FAOSTAT data on country-level 2020 Value Added (Agriculture) in value US$.
++ FAOSTAT data on 2020 Gross Production Value (current thousand US$) of agricultural sector (i.e. Agriculture + (Total)).
+
+
++ Other potential data:
+  + UN National Accounts, Table 2.4: https://data.un.org/Data.aspx?d=SNA&f=group_code%3A204 
+  + OECD Agriculture, forestry, and fishing, value added (current US$): https://data.worldbank.org/indicator/NV.AGR.TOTL.CD
+
+
+# The problem of current approach:
+
+Observed crop output is produced by water together with land, fertilizer, seed, labor, machinery, management, and other inputs. Water helps generate yield, but the value of that yield also depends on the presence of those other inputs. For example, if $\lambda = 0.6$, my estimate says that 60% of observed crop production value is linked to yield-relevant water satisfaction. But that 60% of output value was still produced using fertilizer, seed, machinery, labor, and land. Therefore $\lambda GPV$ should not be interpreted as the value produced by water alone after excluding all non-water inputs.
+
+GVA (gross value added) is the value of output after subtracting the intermediate input costs, which include purchased inputs such as seed, fertilizer, pesticides, fuel, feed, and other materials and services used in production. So, GVA is essentially "net value generated within agriculture". 
+
+
+## CVA derivation
++ Value added subtracts intermediate inputs from gross output.
+
++ Derive crop-specific value added
+
+$$
+CVA^{k}_{jr} = GPV^{k}_{jr} \cdot \theta_r
+$$
+
+where
+
+$$
+\theta_r = \frac{VA^{ag}_{r}}{GO^{ag}_r}
+$$
+
++ $VA^{ag}_{r}$ is agricultural value added
+  + FAOSTAT Macro Indicators: 
+    + "Value Added (Agriculture, Forestry, and Fishing)"
+    + "Value Added (Agriculture)", only 81 countries are available
+  + **World Bank WDI, "Agriculture, forestry, and fishing, value added (current US$)"** ([link](https://data.worldbank.org/indicator/NV.AGR.TOTL.CD))
+
++ $GO^{ag}_r$ is agricultural gross output (or gross production value)
+  + **FAOSTAT Value of Agricultural Production**:
+    + Agriculture + (Total) 
+
+
++ For countries included in the GEP results, get \theta values.
+
+
+# Data preparation 
+
+## Get World Bank country metadata
+
+It provides both region and income level by economy, together with the 3-letter country code. The World Bank API documentation says the country metadata include ISO3 code, country name, region, income level, lending type, and related codes.
+
+```{r}
+library(countrycode)
+```
+
+```{r}
+#/*--------------------------------*/
+#' ## One time only
+#/*--------------------------------*/
+library(jsonlite)
+library(data.table)
+wb_meta_raw <- fromJSON(
+  "https://api.worldbank.org/v2/country?format=json&per_page=400",
+  flatten = TRUE
+)
+
+wb_country_meta <- as.data.table(wb_meta_raw[[2]])
+
+wb_country_meta <-
+  wb_country_meta[
+    region.value != "Aggregates" &
+    incomeLevel.value != "Aggregates",
+    .(
+      iso3 = id,
+      country_name_wb = name,
+      region_wb = region.value,
+      income_group_wb = incomeLevel.value,
+      lending_type_wb = lendingType.value
+    )
+  ]
+
+fwrite(
+  wb_country_meta,
+  here("Data/Raw/WorldBank/wb_country_meta.csv")
+)
+```
+
+## Create a list of countries for which we need to get \theta values
+
+Each country should have (i) valid lambda estimates and (ii) available data on GPV
+
+
+```{r}
+lambda_dt <- 
+  fread(here("Data/Processed/lambda_jr_tbl_CropGBWater.csv"))
+
+gpv_dt <-
+    fread(here("Data/Processed/GPV_rainfed_irrigated_CropGBWater_2020.csv"))
+
+# Get the list of countries with valid lambda and GPV data
+gep_base_dt <-
+  merge(
+    lambda_dt, 
+    gpv_dt,
+    by = c("iso3", "CropGBWater_crop"),
+    all = FALSE
+  ) %>%
+  .[!(is.na(lambda_gn_rf) & is.na(lambda_gn_ir) & is.na(lambda_bl_ir) & is.na(lambda_total_ir))] %>%
+  .[!(is.na(GPV_rain_jr) & is.na(GPV_irr_jr))]
+
+ls_tg_countries <- sort(unique(gep_base_dt$iso3))
+
+theta_table_raw <- 
+  data.table(
+    iso3 = ls_tg_countries
+  )
+```
+
+
+# FAOSTAT data preparation
+
+```{r}
+#/*--------------------------------*/
+#' ## VA and GO from FAOSTAT Macro
+#/*--------------------------------*/
+# reported in million US$, 2015 prices
+fao_va_go_dt_raw <- 
+  fread(
+    here("Data/Raw/FAOSTAT/FAOSTAT_Macro_VA_GO_2000_2020.csv")
+  )
+#    Item Code                                             Item
+#        <int>                                           <char>
+# 1:     22016  Value Added (Agriculture, Forestry and Fishing)
+# 2:     22071 Gross Output (Agriculture, Forestry and Fishing)
+# 3:     22010                        Value Added (Agriculture)
+# 4:     22073                       Gross Output (Agriculture)
+fao_va_go_wide <-
+  fao_va_go_dt_raw %>%
+  # drop historical entities that do not have iso3 code
+  .[!`Area Code (M49)` %in% c(530, 736)] %>%
+  .[, item_name := fcase(
+    `Item Code` == 22010, "va_ag",
+    `Item Code` == 22073, "go_ag",
+    `Item Code` == 22016, "va_aff",
+    `Item Code` == 22071, "go_aff"
+  )] %>%
+  .[, .(
+    year = Year,
+    country = Area,
+    iso3 = countrycode(`Area Code (M49)`, origin = "un", destination = "iso3c"
+    ),
+    item_name,
+    value = Value
+  )] %>%
+  dcast(
+    country + iso3 + year ~ item_name,
+    value.var = "value"
+  ) %>%
+  .[, `:=`(
+    theta_ag = va_ag / go_ag,
+    theta_aff = va_aff / go_aff
+  )] %>%
+  .[, `:=`(
+    theta_ag = fifelse(theta_ag > 0 & theta_ag <= 1, theta_ag, NA_real_),
+    theta_aff = fifelse(theta_aff > 0 & theta_aff <= 1, theta_aff, NA_real_)
+  )]
+
+
+#/*--------------------------------*/
+#' ## Check: theta_ag vs theta_aff
+#/*--------------------------------*/
+ggplot(fao_va_go_wide) +
+  geom_point(aes(x = theta_ag, y = theta_aff)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(x = "Share of VA (Agriculture)", y = "Share of VA (Agriculture, Forestry and Fishing)") +
+  theme_minimal()
+
+# --- Correlation --- #
+# with(fao_va_go_wide, cor(theta_ag, theta_aff, use = "complete.obs"))
+# 0.9555183
+
+# --- Absolute mean difference  --- # 
+# with(fao_va_go_wide, mean(abs(theta_ag - theta_aff), na.rm = TRUE))
+# 0.02572
+# with(fao_va_go_wide, sd(abs(theta_ag - theta_aff), na.rm = TRUE))
+# 0.04129109
+
+
+#/*--------------------------------*/
+#' ## Valid 
+#/*--------------------------------*/
+# Valid \theta values from ag-va-go data for 2020
+theta_ag_2020 <-
+  fao_va_go_wide[
+    year == 2020 & !is.na(theta_ag),
+    .(iso3, theta_ag_2020 = theta_ag)
+  ]
+
+# average \theta values for 2018-2020
+theta_ag_avg_2018_2020 <-
+  fao_va_go_wide[
+    year %in% 2018:2020 & !is.na(theta_ag),
+    .(theta_ag_avg_2018_2020 = mean(theta_ag, na.rm = TRUE)),
+    by = iso3
+  ]
+
+theta_ag_nearest_2000_2020 <-
+fao_va_go_wide[
+  year %in% 2000:2020 & !is.na(theta_ag),
+  .SD[which.min(abs(year - 2020))],
+  by = iso3
+  ] %>%
+  .[,
+    .(
+      iso3,
+      theta_ag_nearest_2000_2020 = theta_ag,
+      theta_ag_nearest_year = year
+    )
+  ]
+
+# setdiff(theta_ag_2020$iso3, theta_ag_avg_2018_2020$iso3)
+# setdiff(theta_ag_avg_2018_2020$iso3, theta_ag_2020$iso3)
+
+# Valid \theta values from aff-va-go data for 2020
+theta_aff_2020 <-
+  fao_va_go_wide[
+    year == 2020 & !is.na(theta_aff),
+    .(iso3, theta_aff_2020 = theta_aff)
+  ]
+
+theta_aff_avg_2018_2020 <-
+  fao_va_go_wide[
+    year %in% 2018:2020 & !is.na(theta_aff),
+    .(theta_aff_avg_2018_2020 = mean(theta_aff, na.rm = TRUE)),
+    by = iso3
+  ]
+
+
+theta_aff_nearest_2000_2020 <-
+  fao_va_go_wide[
+    year %in% 2000:2020 & !is.na(theta_aff),
+    .SD[which.min(abs(year - 2020))],
+    by = iso3
+  ] %>%
+  .[,
+    .(
+      iso3,
+      theta_aff_nearest_2000_2020 = theta_aff,
+      theta_aff_nearest_year = year
+    )
+  ]
+
+# /*===== Merge =====*/
+theta_table_fao <-
+  theta_table_raw %>%
+  merge(theta_ag_2020, by = "iso3", all.x = TRUE) %>%
+  merge(theta_ag_avg_2018_2020, by = "iso3", all.x = TRUE) %>%
+  merge(theta_ag_nearest_2000_2020, by = "iso3", all.x = TRUE) %>%
+  merge(theta_aff_2020, by = "iso3", all.x = TRUE) %>%
+  merge(theta_aff_avg_2018_2020, by = "iso3", all.x = TRUE) %>%
+  merge(theta_aff_nearest_2000_2020, by = "iso3", all.x = TRUE) %>%
+  .[, 
+    theta := fcoalesce(
+    theta_ag_2020,
+    theta_ag_avg_2018_2020,
+    theta_ag_nearest_2000_2020,
+    theta_aff_2020,
+    theta_aff_avg_2018_2020,
+    theta_aff_nearest_2000_2020
+  )] %>%
+  .[, 
+    theta_source := fcase(
+      !is.na(theta_ag_2020), "ag_2020",
+      is.na(theta_ag_2020) & !is.na(theta_ag_avg_2018_2020), "ag_avg_2018_2020",
+      is.na(theta_ag_2020) & is.na(theta_ag_avg_2018_2020) & !is.na(theta_ag_nearest_2000_2020), "ag_nearest_2000_2020",
+      is.na(theta_ag_2020) & is.na(theta_ag_avg_2018_2020) & is.na(theta_ag_nearest_2000_2020) & !is.na(theta_aff_2020), "aff_2020",
+      is.na(theta_ag_2020) & is.na(theta_ag_avg_2018_2020) & is.na(theta_ag_nearest_2000_2020) & is.na(theta_aff_2020) & !is.na(theta_aff_avg_2018_2020), "aff_avg_2018_2020",
+      is.na(theta_ag_2020) & is.na(theta_ag_avg_2018_2020) & is.na(theta_ag_nearest_2000_2020) & is.na(theta_aff_2020) & is.na(theta_aff_avg_2018_2020) & !is.na(theta_aff_nearest_2000_2020), "aff_nearest_2000_2020",
+      default = NA_character_
+    )
+  ] %>%
+  .[, 
+    theta_year := fcase(
+      theta_source == "ag_2020", 2020L,
+      theta_source == "ag_avg_2018_2020", NA_integer_,
+      theta_source == "ag_nearest_2000_2020", theta_ag_nearest_year,
+      theta_source == "aff_2020", 2020L,
+      theta_source == "aff_avg_2018_2020", NA_integer_,
+      theta_source == "aff_nearest_2000_2020", theta_aff_nearest_year,
+      default = NA_integer_
+    )
+  ]
+
+# Then check coverage:
+theta_table_fao[, .N, by = theta_source][order(theta_source)]
+```
+
+
+# Use World Bank country metadata to fill the remaining missing theta values by region/income group medians.
+
+Theta values are missing for 52 out of 145 countries. Since these countries are not included in the FAOSTAT Macro dataset, we cannot get their theta values directly from FAOSTAT. 
+
+To address this issue, we use World Bank country metadata to classify countries by region and income group. The World Bank country metadata provide standardized country-level classifications, including ISO3 country codes, country names, geographic regions, income groups, and lending categories. We use the ISO3 code to merge these classifications into the theta table and use the World Bank region and income-group variables to define groups of economically and geographically comparable countries.
+
+The first imputation method uses the median $\theta$ among countries in the same World Bank region and income group. This is the most targeted imputation rule because it uses countries that are similar both geographically and by income level. However, to avoid relying on very small reference groups, we use the region-income median only when at least five countries in that region-income cell have observed or same FAOSTAT-based $\theta$ values. In the final theta table, this rule is used for 22 countries.
+
+For countries whose region0income cell does not meet the mimunum sample-size requirement, we use the median $\theta$ among countries in the same World Bank region (regardless of income group). This fallback rule is broader and less tailored to income level, but it is more stable becuase it is based on a larger reference group. In the final theta table, this rule is used for 30 countries. No countries require further fallback to income-group medians or the global median.
+
+This imputation strategy balances specificity and stability. The region-income median preserves comparability across countries with similar economic development and geographic conditions, while the regional median avoids assigning values based on very small cells. All imputed values are flagged in the theta table so that value-added-adjusted GEP estimates can be interpreted with appropriate caution.
+
+Note that some $\theta$ values are imputed from regional medians rather than observed country-specific data, the value-added-adjusted GEP estimates should be interpreted as conservative approximations rather than fully contry-specific value-added measures.
+
+
+```{r}
+wb_country_meta <- fread(here("Data/Raw/WorldBank/wb_country_meta.csv"))
+
+#/*--------------------------------*/
+#' ## Merge wb_country_meta to theta_table
+#/*--------------------------------*/
+theta_table <-
+  theta_table_fao %>%
+  merge(
+    wb_country_meta[,
+      .(
+      iso3,
+      country_name_wb,
+      region_wb = trimws(region_wb),
+      income_group_wb = trimws(income_group_wb)
+      )
+    ],
+    by = "iso3", all.x = TRUE
+  )
+
+# Check whether any of your 145 countries are missing WB metadata:
+theta_table[is.na(region_wb) | is.na(income_group_wb), .(iso3)]
+
+#/*--------------------------------*/
+#' ## Construct medians from countries with observed theta
+#/*--------------------------------*/
+
+# 
+theta_region_income_median <-
+  theta_table[
+    !is.na(theta) & !is.na(region_wb) & !is.na(income_group_wb),
+    .(
+      theta_region_income_median = median(theta, na.rm = TRUE),
+      n_region_income = .N
+    ),
+    by = .(region_wb, income_group_wb)
+  ] %>% 
+  .[n_region_income >= 5]
+
+
+theta_region_median <-
+  theta_table[
+    !is.na(theta) & !is.na(region_wb),
+    .(theta_region_median = median(theta, na.rm = TRUE)),
+    by = region_wb
+  ]
+
+theta_income_median <-
+  theta_table[
+    !is.na(theta) & !is.na(income_group_wb),
+    .(theta_income_median = median(theta, na.rm = TRUE)),
+    by = income_group_wb
+  ]
+
+theta_global_median <-
+  theta_table[
+    !is.na(theta),
+    median(theta, na.rm = TRUE)
+  ]
+
+
+#/*--------------------------------*/
+#' ## Merge these fallback medians
+#/*--------------------------------*/
+theta_table <-
+  theta_table %>%
+  merge(
+    theta_region_income_median,
+    by = c("region_wb", "income_group_wb"),
+    all.x = TRUE
+  ) %>%
+  merge(
+    theta_region_median,
+    by = "region_wb",
+    all.x = TRUE
+  ) %>%
+  merge(
+    theta_income_median,
+    by = "income_group_wb",
+    all.x = TRUE
+  ) %>%
+  .[, theta_global_median := theta_global_median] %>%
+  .[, theta_final := 
+    fcoalesce(
+      theta,
+      theta_region_income_median,
+      theta_region_median,
+      theta_income_median,
+      theta_global_median
+    )
+  ] %>%
+  .[, theta_source_final := 
+    fcase(
+      !is.na(theta), theta_source,
+      is.na(theta) & !is.na(theta_region_income_median), "region_income_median",
+      is.na(theta) & is.na(theta_region_income_median) & !is.na(theta_region_median), "region_median",
+      is.na(theta) & is.na(theta_region_income_median) & is.na(theta_region_median) & !is.na(theta_income_median), "income_median",
+      is.na(theta) & is.na(theta_region_income_median) & is.na(theta_region_median) & is.na(theta_income_median), "global_median",
+      default = NA_character_
+    )
+  ]
+
+# Then check final coverage:
+theta_table[, .(
+  N = .N,
+  mean_theta = mean(theta_final, na.rm = TRUE),
+  median_theta = median(theta_final, na.rm = TRUE),
+  min_theta = min(theta_final, na.rm = TRUE),
+  max_theta = max(theta_final, na.rm = TRUE)
+  ), by = theta_source_final] %>%
+  .[order(theta_source_final)]
+
+theta_table[theta_final <= 0 | theta_final > 1]
+
+
+```
+
+93 countries out of 145 countries (64.1%) use country-specific FAOSTAT information, and the remaining 52 countries (35.9%) use regional_income median (22) or region-income median (30) imputation.
+
+
+# Export the final theta table for use in GEP derivation.
+```{r}
+theta_table_final <-
+  theta_table[,
+  .(
+    iso3,
+    country_name_wb,
+    region_wb,
+    income_group_wb,
+    theta = theta_final,
+    theta_source = theta_source_final,
+    theta_year
+  )
+  ]
+
+fwrite(
+  theta_table_final,
+  here("Data/Processed/theta_table_final.csv")
+)
+
+# --- Save --- #
+theta_table[, 
+  .(
+    N = .N,
+    mean_theta = mean(theta_final, na.rm = TRUE),
+    median_theta = median(theta_final, na.rm = TRUE),
+    min_theta = min(theta_final, na.rm = TRUE),
+    max_theta = max(theta_final, na.rm = TRUE)
+  ), by = region_wb] %>%
+  .[order(region_wb)]
+
+```
+
+High theta values (VO/GO ratios) are concentrated in low-income Sub-Saharan African countries. 
+
+Note that theta value is high when intermediate input costs are low relative to gross output. So a high theta value means that a large share of gross agricultural output remains as value added, rather than being paid to purchased inputs such as fertilizer, seed, pesticides, fuel, machinery services, and other intermediate inputs. In many low-income Sub-Saharan African countries, agriculture is more labor-intensive, family-labor based, and lower in purchased input intensity. So, the value-added share of gross output can be relatively high. 
+
+
+
+
+
+# Obsolete code for theta derivation
+
+
+```{r}
+#/*--------------------------------*/
+#' ## VA: World Bank: "Agriculture, forestry, and fishing, value added (current US$)", 
+#/*--------------------------------*/
+wb_va_dt_raw <- 
+  fread(
+    here("Data/Raw/WorldBank/API_NV.AGR.TOTL.CD_DS2_en_csv_v2_394062/API_NV.AGR.TOTL.CD_DS2_en_csv_v2_394062.csv"),
+    skip = 4, header = TRUE
+  )
+
+wb_va_dt_2020 <- wb_va_dt_raw[, 
+  .(
+    country = `Country Name`,
+    iso3 = `Country Code`,
+    va = `2020`
+  )] %>%
+  .[, iso3_check := countrycode::countrycode(country, origin = "country.name", destination = "iso3c")]
+
+wb_va_dt_2020_valid <- wb_va_dt_2020[!is.na(iso3_check)]
+# with(wb_va_dt_2020_valued, identical(iso3, iso3_check))
+
+
+#/*--------------------------------*/
+#' ## VA: FAOSTAT MACRO: Value Added (Agriculture), 81 countries
+#/*--------------------------------*/
+# reported in million US$
+
+fao_va_ag_dt_raw <- 
+  fread(
+    here("Data/Raw/FAOSTAT/FAOSTAT_ValueAdded_Ag_2018_2022.csv")
+  )
+
+fao_va_ag_dt_2020 <-
+  fao_va_ag_dt_raw[Year == 2020][,
+    .(
+      country = `Area`,
+      area_code_m49 = `Area Code (M49)`,
+      va = Value * 10^6 # convert from million US$ to current US$
+    )
+  ] %>%
+  .[, iso3 := countrycode::countrycode(country, origin = "country.name", destination = "iso3c")]
+
+# wb_va_dt_2020[iso3 == "USA"]
+# fao_va_ag_dt_2020[country == "United States of America"]
+
+#/*--------------------------------*/
+#' ## VA: FAOSTAT MACRO: Value Added (Agriculture, Forestry, and Fishing),
+#/*--------------------------------*/
+# reported in million US$
+
+# fao_va_dt_raw <- 
+#   fread(
+#     here("Data/Raw/FAOSTAT/FAOSTAT_ValueAdded_AgForestFish_2018_2022.csv")
+#   )
+
+# fao_va_dt_2020 <- 
+#   fao_va_dt_raw[Year == 2020][,
+#     .(
+#       country = `Area`,
+#       area_code_m49 = `Area Code (M49)`,
+#       va = Value * 10^6 # convert from million US$ to current US$
+#     )
+#   ]
+
+# fao_va_dt_2020[country == "United States of America"]
+
+#/*--------------------------------*/
+#' ## GO: FASTAT
+#/*--------------------------------*/
+# Gross Production Value of agriculture in Current US$
+# "Agriculture + (Total)", reported in current thousand US$, 
+# /*===== Total =====*/
+fao_go_ag_total <- 
+  fread(
+    here("Data/Raw/FAOSTAT/FAOSTAT_GPV_Ag_Total_2020.csv")
+  ) %>%
+  .[,
+    .(
+      country = `Area`,
+      area_code_m49 = `Area Code (M49)`,
+      go = Value * 10^3 # convert from thousand US$ to current US$
+    )
+  ] %>%
+  .[, iso3 := countrycode::countrycode(country, origin = "country.name", destination = "iso3c")]
+
+fao_go_ag_total[country == "United States of America"]
+
+
+
+
+# /*===== By crops (161 countries)=====*/
+# "Agriculture > (List)", reported in current thousand US$,
+# fao_go_ag_list_raw <- fread(here("Data/Raw/FAOSTAT/FAOSTAT_GPV_Ag_List_2020.csv"))
+
+# Just for checking. The sum of crop-specific GPV should be close to the total GPV.
+# fao_go_ag_list_aggregated <- 
+#   fao_go_ag_list_raw[,.(
+#     aggregated_gpv = sum(Value, na.rm = TRUE) * 10^3 # convert from thousand US$ to current
+#   ), by = .(Area)
+#   ]
+# fao_go_ag_list_aggregated[Area == "United States of America"]
+# fao_go_ag_total[country == "United States of America"]
+# Yes, they match
+
+# unique(fao_go_ag_list_raw$Item)
+```
+
+
+# Combine data and calcualate \theta_r
+
+
+```{r}
+# /*===========================================*/
+#'=  Share of VA (\theta_r) =
+# /*===========================================*/
+share_va_dt <- 
+  merge(
+    fao_va_ag_dt_2020[, .(iso3, va)],
+    # wb_va_dt_2020_valid[, .(iso3, va)],
+    fao_go_ag_total[, .(iso3, go)],
+    by = "iso3", all.x = TRUE
+  ) %>%
+  .[, share_va := va / go]
+
+
+any(duplicated(wb_va_dt_2020$iso3))
+
+
+
+wb_va_dt_2020
+fao_go_ag_total
+```

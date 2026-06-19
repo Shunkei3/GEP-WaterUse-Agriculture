@@ -1,0 +1,130 @@
+# Overview
+## Objective
++ `Data_S5_Y2020_Wheat_grid_avg.csv` contains different types of wheat crops (i.e., winter wheat with full cover, winter wheat, and spring wheat). I want to create separate files for each wheat type, so that I can easily merge them with the corresponding crop calendar data in the future.
+
+
+## Data
++ **CropGBWater (@Chukalla.etal2025)**, 2020 data, downloaded from https://zenodo.org/records/17059989
+
++ J_plant: Julian planting day, or day-of-year of planting date
++ Month: the calender month of planting
++ Day: the calendar month of planting
+
+
+```{r}
+# /*===========================================*/
+#'=  Data Compilation (Don't run) =
+# /*===========================================*/
+wheat_calender_dt <-
+  list.files(
+    here("Data/Raw/CropGBWater/CropCalendarFolders/Wheat"),
+    full.names = TRUE
+  ) %>%
+  lapply(., fread) %>%
+  rbindlist()
+
+# nrow(wheat_calender_dt) # 239138, each row is a unique grid information
+# unique(wheat_calender_dt$Month)
+# unique(wheat_calender_dt, by = c("Kc_ini", "Kc_mid", "Kc_end"))
+
+# --- Save --- #
+fwrite(wheat_calender_dt, here("Data/Processed/CropGBWater/wheat_cropcalender.csv"))
+```
+
+# Classification of crops
+
++ Kc_init values of 0.7, 0.4, and 0.3 correspond to FAO-W-WHEAT, FAO-W-WHEATF, and FAO-WHEAT, respectively. Use `Kc_ini` to classify wheat crops into three categories: FAO-W-WHEAT, FAO-W-WHEATF, and FAO-WHEAT.
+  + FAO-W-WHEAT: Winter wheat, full-cover winter variant
+  + FAO-W-WHEATF: Winter wheat
+  + FAO-WHEAT: Spring wheat
++ To merge the wheat calendar data with the wheat water consumption data, we use `ID` in the calendar data and `ClimateID` in the water consumption data as the common key. 
+
+```{r}
+# --- Load wheat CropGBWater --- #
+wheat_wc_dt <- fread(here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded/Data_S5_Y2020_Wheat_grid_avg.csv"))
+# nrow(wheat_dt) # 320978
+# uniqueN(wheat_wc_dt$grid_code) # 320978
+
+# --- Wheat calender crops --- #
+wheat_calendar_dt <- fread(here("Data/Processed/CropGBWater/wheat_cropcalender.csv"))
+# nrow(wheat_calendar_dt) # 239138
+# uniqueN(wheat_calendar_dt$ID) # 239138
+
+# setdiff(wheat_calendar_dt$ID, wheat_wc_dt$ClimateID) %>% length()
+# intersect(wheat_calendar_dt$ID, wheat_wc_dt$ClimateID) %>% length() # all IDs in wheat_calendar_dt are in wheat_wc_dt
+
+wheat_calendar_dt[
+  , wheat_class := fcase(
+    Kc_ini == 0.7, "winter_wheat_ff",
+    Kc_ini == 0.4, "winter_wheat",
+    Kc_ini == 0.3, "spring_wheat",
+    default = NA_character_
+  )
+]
+
+wheat_calendar_dt[
+  , FAO_crop := fcase(
+    Kc_ini == 0.7, "FAO-W-WHEAT",
+    Kc_ini == 0.4, "FAO-W-WHEATF",
+    Kc_ini == 0.3, "FAO-WHEAT",
+    default = NA_character_
+  )
+]
+
+#/*--------------------------------*/
+#' ## Merge
+#/*--------------------------------*/
+wheat_calendar_key <- wheat_calendar_dt[
+  , .(
+    ClimateID = ID,
+    wheat_class,
+    FAO_crop,
+    Kc_ini,
+    Kc_mid,
+    Kc_end,
+    L_ini,
+    L_dev,
+    L_mid,
+    L_late,
+    J_plant,
+    Month,
+    Day,
+    Totalperiod
+  )
+]
+
+wheat_wc_split_dt <- merge(
+  wheat_wc_dt,
+  wheat_calendar_key,
+  by = "ClimateID",
+  all.x = TRUE
+)
+
+# nrow(wheat_wc_split_dt) == nrow(wheat_wc_dt) # TRUE
+
+# --- Check --- #
+wheat_wc_split_dt[
+  , .N,
+  by = .(
+    valid_climate = ClimateID != -9999,
+    matched_calendar = !is.na(wheat_class)
+  )
+]
+
+
+# --- save --- #
+fwrite(
+  wheat_wc_split_dt[wheat_class == "winter_wheat_ff"],
+  here("Data/Processed/CropGBWater/wc/Wheat_winter_fullcover_grid_avg.csv")
+)
+
+fwrite(
+  wheat_wc_split_dt[wheat_class == "winter_wheat"],
+  here("Data/Processed/CropGBWater/wc/Wheat_winter_grid_avg.csv")
+)
+
+fwrite(
+  wheat_wc_split_dt[wheat_class == "spring_wheat"],
+  here("Data/Processed/CropGBWater/wc/Wheat_spring_grid_avg.csv")
+)
+```

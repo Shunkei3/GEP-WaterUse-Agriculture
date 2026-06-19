@@ -1,0 +1,119 @@
+# Overview
+## Objective
++ Repeat the same process for other crops as I did for wheat (but I will not create separate files for each crop type, as I did for wheat).
++ For each crop, I will merge the crop calendar data with the water consumption data using `ID` in the calendar data and `ClimateID` in the water consumption data as the common key.
+
+## Process
+
+
+
+```{r}
+#/*--------------------------------*/
+#' ## Preparation
+#/*--------------------------------*/
+crop_correspondence_dt <- 
+  fread(here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv")) %>%
+  .[!CropGBWater_crop %in% c("Wheat_winter_fullcover", "Wheat_winter", "Wheat_spring")]
+
+ls_CropGBWater_crop <- crop_correspondence_dt$CropGBWater_crop
+
+
+# --- Chekc --- #
+# ls_crop_calender_file <- 
+#   list.files(
+#     here("Data/Raw/CropGBWater/CropCalendarFolders"),
+#     full.names = FALSE
+#   )
+
+# setdiff(ls_CropGBWater_crop, ls_crop_calender_file)
+```
+
+
+```{r}
+for(crop_i in ls_CropGBWater_crop) {
+  # crop_i = ls_CropGBWater_crop[1]
+
+  message("Processing crop: ", crop_i)
+
+  #/*--------------------------------*/
+  #' ## Compile crop calender data
+  #/*--------------------------------*/
+  ls_calender_file <- 
+    list.files(
+      here("Data/Raw/CropGBWater/CropCalendarFolders", crop_i),
+      full.names = TRUE
+    )
+  # length(ls_calender_file)
+  
+  stopifnot(length(ls_calender_file) > 0)
+
+  calender_dt <- 
+    rbindlist(
+      lapply(ls_calender_file, fread),
+      use.names = TRUE,
+      fill = TRUE
+    )
+  
+  if (!"ID" %in% names(calender_dt)) {
+    stop("Calendar file for ", crop_i, " does not contain ID column.")
+  }
+  
+  if (uniqueN(calender_dt$ID) != nrow(calender_dt)) {
+    warning("Calendar ID is not unique for crop: ", crop_i)
+  }
+
+  if(any(names(calender_dt) %in% "Total")){
+    setnames(calender_dt, "Total", "Totalperiod")
+  }
+
+  calender_dt_key <- 
+    calender_dt[,
+      .(
+        ClimateID = ID,
+        Kc_ini,
+        Kc_mid,
+        Kc_end,
+        L_ini,
+        L_dev,
+        L_mid,
+        L_late,
+        J_plant,
+        Month,
+        Day,
+        Totalperiod
+      )
+    ]
+
+  #/*--------------------------------*/
+  #' ## Merge with 
+  #/*--------------------------------*/
+  # --- Load CropGBWater water consumption data --- #
+  wc_file <- here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded", paste0("Data_S5_Y2020_", crop_i, "_grid_avg.csv"))
+
+  if (!file.exists(wc_file)) {
+    stop("Water-consumption file does not exist: ", wc_file)
+  }
+  
+  wc_dt <- fread(wc_file)
+  
+  if (!"ClimateID" %in% names(wc_dt)) {
+    stop("Water-consumption file for ", crop_i, " does not contain ClimateID.")
+  }
+
+  merged_dt <- 
+    merge(
+      wc_dt,
+      calender_dt_key,
+      by = "ClimateID",
+      all.x = TRUE
+    )
+  
+  if (nrow(merged_dt) != nrow(wc_dt)) {
+    stop("Merge expanded or reduced rows for crop: ", crop_i)
+  }
+
+  out_file <- here("Data/Processed/CropGBWater/wc", paste0(crop_i, "_grid_avg.csv"))
+
+  fwrite(merged_dt, out_file)
+}
+```
