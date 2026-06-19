@@ -2,3 +2,15 @@
 .Rhistory
 .RData
 .Ruserdata
+
+.DS_Store
+
+x_notes
+z_Archive
+
+**.html
+**.docx
+Writing/z_Template
+
+
+**/x_report
