@@ -10,28 +10,35 @@ For irrigated crops,:
 ## NOTE:
 + Crop-stage ETm is constructed using a representative 365-day daily ET0 profile averaged over 2018–2022. For growing seasons crossing December 31, days after year-end are mapped to the corresponding early-year day-of-year in the representative profile.
 
-# Data loading
+# Loading Data
 
 ```{r}
 # --- Load functions --- #
 library(countrycode)
-source(here("Scr/Agriculture/2-Irr_Code/DataPrep/0-functions-dataprep.R"))
+source(here("Code/0-functions-dataprep.R"))
 
-# --- Suppress messages from data.table --- #
-options(datatable.showProgress = FALSE)
-options(datatable.verbose = FALSE)
-
-# --- Crop Kc Ky Table --- #
-crop_param_dt <- fread(here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv"))
+# === Crop Kc Ky Table === #
+crop_param_dt <- 
+  fread(
+    here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv")
+  )
 
 crop_param_long <- 
-  crop_param_dt[,.(FAO_crop, CropGBWater_crop, crop_name, Yini, Ydev, Ymid, Yend)] %>%
+  crop_param_dt[
+    ,.(
+      FAO_crop, 
+      CropGBWater_crop, 
+      crop_name, 
+      Yini, Ydev, Ymid, Yend
+    )
+  ] %>%
   melt(
     id.vars = c("CropGBWater_crop", "FAO_crop", "crop_name"),
     measure.vars = patterns("^Y"),
     variable.name = "stage",
     value.name = "Ky"
   ) %>%
+  # Rename stage names
   .[, stage:= fcase(
     stage == "Yini", "ini",
     stage == "Ydev", "dev",
@@ -42,8 +49,18 @@ crop_param_long <-
 
 ls_crops <- crop_param_dt$CropGBWater_crop
 
-# --- Daily ET0 data --- #
-et0_daily_dt <- fread(here("Data/Processed/CropGBWater/et0_daily_avg_2020.csv"))
+# === Average Daily ET0 data === #
+et0_daily_dt <- 
+  fread(
+    here("Data/Processed/CropGBWater/et0_daily_avg_2020.csv")
+  )
+
+
+# === CropGBWater Grid-level VNR share === #
+grid_code_vmr <-
+  fread(
+    here("Data/Processed/CropGBWater_grid_code_vmr.csv")
+  )
 ```
 
 
@@ -61,27 +78,39 @@ get_lambda <- function(crop_i){
   message("Calculating lambda for crop: ", crop_i)
 
   # --- load wc data --- #
-  wc_dt_crop_i <- fread(here("Data/Processed/CropGBWater/wc", paste0(crop_i, "_grid_avg.csv")))
+  wc_dt_crop_i <- 
+    fread(
+      here(
+        "Data/Processed/CropGBWater/wc", 
+        paste0(crop_i, "_grid_avg.csv")
+        )
+    )
+
 
   #/*--------------------------------*/
-  #' ## Step 1: Calculate ETm_{jgtd}
-  #/*--------------------------------*/
+  #' ## Step 1: Calculate ETm_{jgtd}: Aggregate daily ETm to crop-grid-month-stage level
+  #/*--------------------------------*/ 
   # Crop water requirement accumulated over that month-stage portion
-  etm_month_stage <- get_etm_month_stage(wc_dt_crop_i, et0_daily_dt)
+  etm_month_stage <- 
+    get_etm_month_stage(wc_dt_crop_i, et0_daily_dt)
    
+
   #/*--------------------------------*/
-  #' ## Step 2: Allocate monthly CropGBWawter water consumption to stages
+  #' ## Step 2: Allocate monthly CropGBWawter water consumption to month-stages
   #/*--------------------------------*/
   # (j, g, m, h) level
-  wc_month_stage <- get_wc_month_stage(wc_dt_crop_i, etm_month_stage)
+  wc_month_stage <- 
+    get_wc_month_stage(wc_dt_crop_i, etm_month_stage)
 
   # wc_month_stage[ClimateID == 212972]
+  # unique(wc_month_stage[, .(month_name, stage)])
 
   #/*--------------------------------*/
   #' ## Step 3: Convert mm to volume
   #/*--------------------------------*/
   # (j, g, m, h) level
-  wc_month_stage_volume <- get_wc_stage_volume(wc_month_stage)
+  wc_month_stage_volume <- 
+    get_wc_stage_volume(wc_month_stage)
 
   #' + ETm_rf_stage_m3
   #' + ETm_ir_stage_m3
@@ -113,34 +142,52 @@ get_lambda <- function(crop_i){
   #' ## Step 5: s_jrgmh calculation
   #/*--------------------------------*/
   # (j, g, h) level
-  # For each grid-month-stage, calculate water satisfaction ratio for rainfed and irrigated land separately
-  s_jgmh_tbl <- get_s_jrgh(wc_stage_volume)
+  # For each crop-country-grid-stage, calculate water satisfaction ratios for rainfed and irrigated production separately. 
+  # At this stage, VMR (Vegetation Moisture Recycling) is incorporated by partitioning satisfied green water into VMR and non-VMR components.
+
+  s_jrgh_tbl <- get_s_jrgh(wc_stage_volume, grid_code_vmr)
 
   # --- check --- #
   # s_jgmh_tbl[!is.na(s_total_ir_check)]
+
+  # The key outputs are:
+  # s_gn_rf_jrgh: green-water satisfaction ratio on rainfed land
+  # s_gn_ir_jrgh: green-water satisfaction ratio on irrigated land
+  # s_bl_ir_jrgh: blue-water satisfaction ratio on irrigated land
+  # s_total_ir_jrgh: total water satisfaction ratio on irrigated land
+  # 
+  # s_gn_rf_vmr_jrgh: VMR-origin green-water satisfaction ratio on rainfed land
+  # s_gn_rf_nonvmr_jrgh: non-VMR green-water satisfaction ratio on rainfed land
+  # s_gn_ir_vmr_jrgh: VMR-origin green-water satisfaction ratio on irrigated land
+  # s_gn_ir_nonvmr_jrgh: non-VMR green-water satisfaction ratio on irrigated land
  
   #/*--------------------------------*/
   #' ## Step 6: s_jrh calculation
-  #/*--------------------------------*/
-  # water satisfaction ratio for each crop-grid-month-stage
-  s_jrh_tbl <- get_s_jrh(s_jgmh_tbl)
+  #/*--------------------------------*/ 
+  # This step aggregates from crop-grid-stage to crop-country-stage level.
+  s_jrh_tbl <- get_s_jrh(s_jrgh_tbl)
 
-  # The kye outputs are:
-  #' + s_gn_rf_jrh: green water satisfaction on rainfed land
-  #' + s_gn_ir_jrh: green water satisfaction on irrigated land
-  #' + s_bl_jrh: blue water satisfaction on irrigated land
-  #' + s_total_ir_jrh: total water satisfaction on irrigated land (including both green and blue water)
+  #' The kye outputs are:
+  #' s_gn_rf_jrh:Green-water satisfaction ratio for rainfed production
+  #' s_gn_ir_jrh:Green-water satisfaction ratio for irrigated production
+  #' s_bl_ir_jrh:Blue-water satisfaction ratio for irrigated production
+  #' s_total_ir_jrh:Total water satisfaction ratio for irrigated production
+
+  #' s_gn_rf_vmr_jrh:VMR-origin green-water satisfaction ratio for rainfed production
+  #' s_gn_rf_nonvmr_jrh:Non-VMR green-water satisfaction ratio for rainfed production
+  #' s_gn_ir_vmr_jrh:VMR-origin green-water satisfaction ratio for irrigated production
+  #' s_gn_ir_nonvmr_jrh:Non-VMR green-water satisfaction ratio for irrigated production
+
+  #' vmr_ETm_coverage_rf:Share of rainfed ETm represented by grid cells with observed VMR
+  #' vmr_ETm_coverage_ir:Share of irrigated ETm represented by grid cells 
+
  
   #/*--------------------------------*/
   #' ## Step 7: lambda calculation
   #/*--------------------------------*/
   # water satisfaction ratio for each crop-country
 
-  # The key outputs are:
-  #' + lambda_gn_rf: lambda for green water on rainfed land
-  #' + lambda_gn_ir: lambda for green water on irrigated land
-  #' + lambda_bl_ir: lambda for blue water on irrigated land
-  #' + lambda_total_ir: lambda for total water on irrigated land (including both green
+ 
   crop_param_crop_i <- crop_param_long[CropGBWater_crop == crop_i]
 
   s_jrh_ky_tbl <- merge(s_jrh_tbl, crop_param_crop_i, by = "stage", all.x = TRUE)
@@ -161,6 +208,9 @@ get_lambda <- function(crop_i){
         lambda_bl_ir = calc_lambda(s_bl_ir_jrh, Ky),
         lambda_total_ir = calc_lambda(s_total_ir_jrh, Ky),
 
+        lambda_gn_rf_vmr = calc_lambda(s_gn_rf_vmr_jrh, Ky),
+        lambda_gn_ir_vmr = calc_lambda(s_gn_ir_vmr_jrh, Ky),
+
         n_stage = uniqueN(stage),
         n_stage_with_Ky = sum(!is.na(Ky))
       ),
@@ -177,6 +227,14 @@ get_lambda <- function(crop_i){
   ][,
     lambda_total_ir_diff := lambda_total_ir - lambda_total_ir_check
   ]
+
+  # The key outputs are:
+  #' + lambda_gn_rf: lambda for green water on rainfed land
+  #' + lambda_gn_ir: lambda for green water on irrigated land
+  #' + lambda_bl_ir: lambda for blue water on irrigated land
+  #' + lambda_total_ir: lambda for total water on irrigated land (including both green
+  #' + lambda_gn_rf_vmr:VMR-origin green-water contribution coefficient for rainfed production
+  #' + lambda_gn_ir_vmr:VMR-origin green-water contribution coefficient for irrigated production
 
   #/*--------------------------------*/
   #' ## Add some information
@@ -224,12 +282,13 @@ get_lambda <- function(crop_i){
 
   # nrow(keep_dt) == nrow(lambda_jr_tbl) 
 
-  lambda_jr_tbl_out <- merge(
-    lambda_jr_tbl,
-    keep_dt,
-    by = "ADM0_NAME",
-    all.x = TRUE
-  )
+  lambda_jr_tbl_out <- 
+    merge(
+      lambda_jr_tbl,
+      keep_dt,
+      by = "ADM0_NAME",
+      all.x = TRUE
+    )
 
   return(lambda_jr_tbl_out[])
 }
@@ -348,8 +407,11 @@ lambda_jr_tbl <-
 # setdiff(ls_crops, lambda_jr_tbl$CropGBWater_crop)
 
 # lambda_jr_tbl[iso3 == "USA", .(CropGBWater_crop, lambda_gn_rf, lambda_gn_ir, lambda_bl_ir, lambda_total_ir)]
+```
 
 
+
+```{r}
 # /*===== Save =====*/
 fwrite(
   lambda_jr_tbl,
