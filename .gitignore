@@ -5,12 +5,15 @@
 
 .DS_Store
 
-x_notes
-z_Archive
+Code/x_notes/*
+Code/z_Archive/*
+Writing/z_Template/*
+Data/*
+z_Document/*
 
 **.html
 **.docx
-Writing/z_Template
 
 
-**/x_report
+
+
