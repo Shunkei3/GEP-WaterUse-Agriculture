@@ -34,7 +34,7 @@ Processes FAOSTAT Gross Production Value (GPV) data and uses SPAM production sha
 
 **Main output:** `GPV_rainfed_irrigated_CropGBWater_2020.csv`
 
-## `2-1-CropGBWater-Wheat.qmd`
+### `2-1-CropGBWater-Wheat.qmd`
 
 Processes the CropGBWater wheat data by matching wheat crop-calendar information to water-consumption data and separating spring wheat, winter wheat, and full-cover winter wheat.
 
