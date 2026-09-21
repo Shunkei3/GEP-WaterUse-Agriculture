@@ -17,7 +17,7 @@
 # /*===========================================*/
 wheat_calender_dt <-
   list.files(
-    here("Data/Raw/CropGBWater/CropCalendarFolders/Wheat"),
+    file.path(raw_data_dir, "CropGBWater/CropCalendarFolders/Wheat"),
     full.names = TRUE
   ) %>%
   lapply(., fread) %>%
@@ -28,7 +28,10 @@ wheat_calender_dt <-
 # unique(wheat_calender_dt, by = c("Kc_ini", "Kc_mid", "Kc_end"))
 
 # --- Save --- #
-fwrite(wheat_calender_dt, here("Data/Processed/CropGBWater/wheat_cropcalender.csv"))
+fwrite(
+  wheat_calender_dt, 
+  here("Data/Processed/CropGBWater/wheat_cropcalender.csv")
+)
 ```
 
 # Classification of crops
@@ -41,12 +44,18 @@ fwrite(wheat_calender_dt, here("Data/Processed/CropGBWater/wheat_cropcalender.cs
 
 ```{r}
 # --- Load wheat CropGBWater --- #
-wheat_wc_dt <- fread(here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded/Data_S5_Y2020_Wheat_grid_avg.csv"))
+wheat_wc_dt <- 
+  fread(
+    file.path(raw_data_dir, "CropGBWater/Data_S5_Y2020_WC_mm_gridded/Data_S5_Y2020_Wheat_grid_avg.csv")
+  )
 # nrow(wheat_dt) # 320978
 # uniqueN(wheat_wc_dt$grid_code) # 320978
 
 # --- Wheat calender crops --- #
-wheat_calendar_dt <- fread(here("Data/Processed/CropGBWater/wheat_cropcalender.csv"))
+wheat_calendar_dt <- 
+  fread(
+    here("Data/Processed/CropGBWater/wheat_cropcalender.csv")
+  )
 # nrow(wheat_calendar_dt) # 239138
 # uniqueN(wheat_calendar_dt$ID) # 239138
 

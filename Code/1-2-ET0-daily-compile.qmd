@@ -17,14 +17,18 @@ library(lubridate)
 #/*--------------------------------*/
 #' ## Test run (Don't run)
 #/*--------------------------------*/
-eto_file <- here("Data/Raw/CropGBWater/ETo/PET_1000071.ETO")
+raw_data_dir <- 
+  "/Volumes/baseHD/NatCapTEEMs/GEP/WaterUse_Ag/Data/Raw"
 
-eto_dt <- fread(
-  eto_file,
-  skip = 8,
-  header = FALSE,
-  col.names = "ET0"
-)
+eto_file <- file.path(raw_dat_dir, "CropGBWater/ETo/PET_1000071.ETO")
+
+eto_dt <- 
+  fread(
+    eto_file,
+    skip = 8,
+    header = FALSE,
+    col.names = "ET0"
+  )
 
 eto_dt[, ClimateID := 1000071]
 eto_dt[, date := as.Date("2018-01-01") + 0:(.N - 1)]
@@ -90,11 +94,12 @@ read_eto_file <- function(path) {
 #/*--------------------------------*/
 #' ## Process
 #/*--------------------------------*/
-files_et0 <- list.files(
-  here("Data/Raw/CropGBWater/ETo"),
-  pattern = "\\.ETO$",
-  full.names = TRUE
-)
+files_et0 <- 
+  list.files(
+    file.path(raw_data_dir, "CropGBWater/ETo")
+    pattern = "\\.ETO$",
+    full.names = TRUE
+  )
 
 # length(files_et0) # 361322
 library(parallel)
@@ -105,7 +110,10 @@ eto_all_dt <-
     use.names = TRUE
   )
 
-fwrite(eto_all_dt, here("Data/Processed/CropGBWater/et0_daily_2018_2022.csv"))
+fwrite(
+  eto_all_dt, 
+  here("Data/Processed/CropGBWater/et0_daily_2018_2022.csv")
+)
 ```
 
 
@@ -126,6 +134,9 @@ setorder(eto_365_dt, ClimateID, doy)
 # --- Check --- #
 eto_365_dt[, .N, by = ClimateID][N != 365]
 
-fwrite(eto_365_dt, here("Data/Processed/CropGBWater/et0_daily_avg_2020.csv"))
+fwrite(
+  eto_365_dt, 
+  here("Data/Processed/CropGBWater/et0_daily_avg_2020.csv")
+)
 ```
 

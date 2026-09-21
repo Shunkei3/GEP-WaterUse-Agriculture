@@ -442,17 +442,34 @@ get_wc_stage_volume <- function(wc_month_stage_dt){
 # /*===========================================*/
 # For each (j, r, g, m, h), calculate s (i.e., water satisfaction ratio)
 
-get_s_jrgh <- function(wc_stage_volume){
-  #/*--------------------------------*/
-  #' ## Test Run
-  # wc_stage_volume <- wc_stage_volume
-  #/*--------------------------------*/
+get_s_jrgh <- function(wc_stage_volume, grid_code_vmr){
   
   dt <- copy(wc_stage_volume)
-  
-  #/*--------------------------------*/
-  #' ## Required columns
-  #/*--------------------------------*/
+  vmr_dt <- copy(grid_code_vmr)
+
+  # Check VMR lookup
+  stopifnot(all(c("grid_code", "vmr_p") %in% names(vmr_dt)))
+
+  if (vmr_dt[, anyDuplicated(grid_code)] > 0) {
+    stop("grid_code_vmr contains duplicated grid_code values.")
+  }
+
+  stopifnot(
+    vmr_dt[
+      !is.na(vmr_p),
+      all(vmr_p >= 0 & vmr_p <= 1)
+    ]
+  )
+
+  # Attach VMR fraction
+  dt <- merge(
+    dt,
+    vmr_dt[, .(grid_code, vmr_p)],
+    by = "grid_code",
+    all.x = TRUE
+  )
+
+  # Required columns
   req_cols <- c(
     "ETm_rf_jrgh_m3",
     "ETm_ir_jrgh_m3",
@@ -460,86 +477,147 @@ get_s_jrgh <- function(wc_stage_volume){
     "WC_gn_ir_jrgh_m3",
     "WC_bl_jrgh_m3"
   )
-  
+
   stopifnot(all(req_cols %in% names(dt)))
   
   #/*--------------------------------*/
   #' ## Satisfied water volumes
   #/*--------------------------------*/
-  #' Rainfed green water
-  dt[,
-    Sat_gn_rf_jrgh_m3 := pmin(
-      WC_gn_rf_jrgh_m3,
-      ETm_rf_jrgh_m3
-    )
+  dt[
+    , `:=`(
+        # Green water on rainfed land
+        Sat_gn_rf_jrgh_m3 = 
+          pmin(
+            WC_gn_rf_jrgh_m3, 
+            ETm_rf_jrgh_m3
+          ),
+
+       # Green water on irrigated land
+        Sat_gn_ir_jrgh_m3 = 
+          pmin(
+            WC_gn_ir_jrgh_m3, 
+            ETm_ir_jrgh_m3
+          ),
+        
+        # Blue water on irrigated land
+        # This is the incremental water requirement satisfied by blue water after green water on irrigated land has already contributed.
+        Sat_bl_ir_jrgh_m3 = 
+          pmin(
+            WC_gn_ir_jrgh_m3 + WC_bl_jrgh_m3, 
+            ETm_ir_jrgh_m3
+          ) - 
+          pmin(
+            WC_gn_ir_jrgh_m3, 
+            ETm_ir_jrgh_m3
+          ),
+        
+        # Total water satisfaction on irrigated land
+        Sat_total_ir_jrgh_m3 = 
+          pmin(
+            WC_gn_ir_jrgh_m3 + WC_bl_jrgh_m3, 
+            ETm_ir_jrgh_m3
+          )
+      )
   ]
-  
-  #' Green water on irrigated land
-  dt[,
-    Sat_gn_ir_jrgh_m3 := pmin(
-      WC_gn_ir_jrgh_m3,
-      ETm_ir_jrgh_m3
-    )
-  ]
-  
-  #' Blue irrigation water
-  #' This is the incremental water requirement satisfied by blue water
-  #' after green water on irrigated land has already contributed.
-  dt[,
-    Sat_bl_ir_jrgh_m3 :=
-      pmin(WC_gn_ir_jrgh_m3 + WC_bl_jrgh_m3, ETm_ir_jrgh_m3) -
-      pmin(WC_gn_ir_jrgh_m3, ETm_ir_jrgh_m3)
-  ]
-  
-  #' Total water satisfaction on irrigated land
-  dt[,
-    Sat_total_ir_jrgh_m3 := pmin(
-      WC_gn_ir_jrgh_m3 + WC_bl_jrgh_m3,
-      ETm_ir_jrgh_m3
-    )
-  ]
-  
+ 
   #/*--------------------------------*/
-  #' ## Water satisfaction ratios
+  #' ## Partition satisfied green water by VMR origin
   #/*--------------------------------*/
-  dt[,
-    s_gn_rf_jrgh := fifelse(
-      ETm_rf_jrgh_m3 > 0,
-      Sat_gn_rf_jrgh_m3 / ETm_rf_jrgh_m3,
-      NA_real_
+  # Here VMR ratio (vmr_p) is used to partition satisfied green water into VMR and non-VMR components.
+  dt[
+    , `:=`(
+        Sat_gn_rf_vmr_jrgh_m3 =
+          Sat_gn_rf_jrgh_m3 * vmr_p,
+
+        Sat_gn_rf_nonvmr_jrgh_m3 =
+          Sat_gn_rf_jrgh_m3 * (1 - vmr_p),
+
+        Sat_gn_ir_vmr_jrgh_m3 =
+          Sat_gn_ir_jrgh_m3 * vmr_p,
+
+        Sat_gn_ir_nonvmr_jrgh_m3 =
+          Sat_gn_ir_jrgh_m3 * (1 - vmr_p)
+      )
+  ]
+
+  #/*--------------------------------*/
+  #' ## Water satisfaction ratios (original)
+  #/*--------------------------------*/
+  dt[
+    , `:=`(
+        s_gn_rf_jrgh = fifelse(
+          ETm_rf_jrgh_m3 > 0,
+          Sat_gn_rf_jrgh_m3 / ETm_rf_jrgh_m3,
+          NA_real_
+        ),
+        s_gn_ir_jrgh = fifelse(
+          ETm_ir_jrgh_m3 > 0,
+          Sat_gn_ir_jrgh_m3 / ETm_ir_jrgh_m3,
+          NA_real_
+        ),
+        s_bl_ir_jrgh = fifelse(
+          ETm_ir_jrgh_m3 > 0,
+          Sat_bl_ir_jrgh_m3 / ETm_ir_jrgh_m3,
+          NA_real_
+        ),
+        s_total_ir_jrgh = fifelse(
+          ETm_ir_jrgh_m3 > 0,
+          Sat_total_ir_jrgh_m3 / ETm_ir_jrgh_m3,
+          NA_real_
+        )
+      )
+  ]
+ 
+
+  #/*--------------------------------*/
+  #' ## VMR-specific satisfaction ratios
+  #/*--------------------------------*/
+  dt[
+    ,
+    `:=`(
+      s_gn_rf_vmr_jrgh = fifelse(
+        ETm_rf_jrgh_m3 > 0,
+        Sat_gn_rf_vmr_jrgh_m3 / ETm_rf_jrgh_m3,
+        NA_real_
+      ),
+
+      s_gn_rf_nonvmr_jrgh = fifelse(
+        ETm_rf_jrgh_m3 > 0,
+        Sat_gn_rf_nonvmr_jrgh_m3 / ETm_rf_jrgh_m3,
+        NA_real_
+      ),
+
+      s_gn_ir_vmr_jrgh = fifelse(
+        ETm_ir_jrgh_m3 > 0,
+        Sat_gn_ir_vmr_jrgh_m3 / ETm_ir_jrgh_m3,
+        NA_real_
+      ),
+
+      s_gn_ir_nonvmr_jrgh = fifelse(
+        ETm_ir_jrgh_m3 > 0,
+        Sat_gn_ir_nonvmr_jrgh_m3 / ETm_ir_jrgh_m3,
+        NA_real_
+      )
     )
   ]
-  
-  dt[,
-    s_gn_ir_jrgh := fifelse(
-      ETm_ir_jrgh_m3 > 0,
-      Sat_gn_ir_jrgh_m3 / ETm_ir_jrgh_m3,
-      NA_real_
-    )
-  ]
-  
-  dt[,
-    s_bl_ir_jrgh := fifelse(
-      ETm_ir_jrgh_m3 > 0,
-      Sat_bl_ir_jrgh_m3 / ETm_ir_jrgh_m3,
-      NA_real_
-    )
-  ]
-  
-  dt[,
-    s_total_ir_jrgh := fifelse(
-      ETm_ir_jrgh_m3 > 0,
-      Sat_total_ir_jrgh_m3 / ETm_ir_jrgh_m3,
-      NA_real_
-    )
-  ]
+
+
   
   #/*--------------------------------*/
   #' ## Diagnostic check
   #/*--------------------------------*/
-  #' s_gn_ir_jrgh + s_bl_ir_jrgh should equal s_total_ir_jrgh
-  dt[,
-    s_total_ir_check := s_gn_ir_jrgh + s_bl_ir_jrgh
+  dt[
+    ,
+    `:=`(
+      s_gn_rf_vmr_check =
+        s_gn_rf_vmr_jrgh + s_gn_rf_nonvmr_jrgh,
+
+      s_gn_ir_vmr_check =
+        s_gn_ir_vmr_jrgh + s_gn_ir_nonvmr_jrgh,
+
+      s_total_ir_check =
+        s_gn_ir_jrgh + s_bl_ir_jrgh
+    )
   ]
   
   setorder(dt, ADM0_NAME, grid_code, stage)
@@ -554,12 +632,27 @@ get_s_jrgh <- function(wc_stage_volume){
 #' Aggregate the numerator and denominator volumes first, then calculate s_jrh
 
 get_s_jrh <- function(s_jrgh_tbl){
-  #/*--------------------------------*/
-  #' ## Test Run
-  # s_jrgh_tbl <- s_jrgh_tbl
-  #/*--------------------------------*/
   
-  dt <- copy(s_jrgh_tbl)
+  dt <- copy(s_jgh_tbl)
+
+  #/*--------------------------------*/
+  #' ## Required columns
+  #/*--------------------------------*/
+  req_cols <- c(
+    "ETm_rf_jrgh_m3",
+    "ETm_ir_jrgh_m3",
+    "Sat_gn_rf_jrgh_m3",
+    "Sat_gn_ir_jrgh_m3",
+    "Sat_bl_ir_jrgh_m3",
+    "Sat_total_ir_jrgh_m3",
+    "Sat_gn_rf_vmr_jrgh_m3",
+    "Sat_gn_rf_nonvmr_jrgh_m3",
+    "Sat_gn_ir_vmr_jrgh_m3",
+    "Sat_gn_ir_nonvmr_jrgh_m3",
+    "vmr_p"
+  )
+
+  stopifnot(all(req_cols %in% names(dt)))
   
   #/*--------------------------------*/
   #' ## Aggregate satisfied volumes and ETm volumes
@@ -567,57 +660,126 @@ get_s_jrh <- function(s_jrgh_tbl){
   s_jrh_tbl <- dt[
     ,
     .(
+      # Original ETm
       ETm_rf_jrh_m3 = sum(ETm_rf_jrgh_m3, na.rm = TRUE),
       ETm_ir_jrh_m3 = sum(ETm_ir_jrgh_m3, na.rm = TRUE),
-      
+
+
+      # Original satisfied water     
       Sat_gn_rf_jrh_m3 = sum(Sat_gn_rf_jrgh_m3, na.rm = TRUE),
       Sat_gn_ir_jrh_m3 = sum(Sat_gn_ir_jrgh_m3, na.rm = TRUE),
       Sat_bl_ir_jrh_m3 = sum(Sat_bl_ir_jrgh_m3, na.rm = TRUE),
       Sat_total_ir_jrh_m3 = sum(Sat_total_ir_jrgh_m3, na.rm = TRUE),
-      
-      n_grid = uniqueN(grid_code)
+
+      # ETm for grid cells with observed VMR
+      ETm_rf_vmr_obs_jrh_m3 = sum(ETm_rf_jrgh_m3[!is.na(vmr_p)]),
+      ETm_ir_vmr_obs_jrh_m3 = sum( ETm_ir_jrgh_m3[!is.na(vmr_p)]),
+
+      # VMR-origin green water
+      Sat_gn_rf_vmr_jrh_m3 = sum(Sat_gn_rf_vmr_jrgh_m3, na.rm = TRUE),
+      Sat_gn_ir_vmr_jrh_m3 = sum(Sat_gn_ir_vmr_jrgh_m3, na.rm = TRUE),
+
+      # Non-VMR green water
+      Sat_gn_rf_nonvmr_jrh_m3 = sum(Sat_gn_rf_nonvmr_jrgh_m3, na.rm = TRUE),
+      Sat_gn_ir_nonvmr_jrh_m3 = sum(Sat_gn_ir_nonvmr_jrgh_m3, na.rm = TRUE),
+
+
+      n_grid = uniqueN(grid_code),
+      n_grid_vmr = uniqueN(grid_code[!is.na(vmr_p)])
     ),
     by = .(
       ADM0_NAME,
       stage
     )
   ]
+
   
   #/*--------------------------------*/
-  #' ## Calculate country-crop-stage water satisfaction ratios
+  #' ## Country-crop-stage water satisfaction ratios (original)
   #/*--------------------------------*/
-  s_jrh_tbl[,
-    s_gn_rf_jrh := fifelse(
-      ETm_rf_jrh_m3 > 0,
-      Sat_gn_rf_jrh_m3 / ETm_rf_jrh_m3,
-      NA_real_
+  s_jrh_tbl[
+    , `:=`(
+      s_gn_rf_jrh = fifelse(
+        ETm_rf_jrh_m3 > 0,
+        Sat_gn_rf_jrh_m3 / ETm_rf_jrh_m3,
+        NA_real_
+      ),
+
+      s_gn_ir_jrh = fifelse(
+        ETm_ir_jrh_m3 > 0,
+        Sat_gn_ir_jrh_m3 / ETm_ir_jrh_m3,
+        NA_real_
+      ),
+
+      s_bl_ir_jrh = fifelse(
+        ETm_ir_jrh_m3 > 0,
+        Sat_bl_ir_jrh_m3 / ETm_ir_jrh_m3,
+        NA_real_
+      ),
+
+      s_total_ir_jrh = fifelse(
+        ETm_ir_jrh_m3 > 0,
+        Sat_total_ir_jrh_m3 / ETm_ir_jrh_m3,
+        NA_real_
+      )
     )
   ]
-  
-  s_jrh_tbl[,
-    s_gn_ir_jrh := fifelse(
-      ETm_ir_jrh_m3 > 0,
-      Sat_gn_ir_jrh_m3 / ETm_ir_jrh_m3,
-      NA_real_
+
+   #/*--------------------------------*/
+  #' ## VMR-specific satisfaction ratios
+  #/*--------------------------------*/
+  s_jrh_tbl[
+    , `:=`(
+      s_gn_rf_vmr_jrh = fifelse(
+        ETm_rf_vmr_obs_jrh_m3 > 0,
+        Sat_gn_rf_vmr_jrh_m3 /
+          ETm_rf_vmr_obs_jrh_m3,
+        NA_real_
+      ),
+
+      s_gn_rf_nonvmr_jrh = fifelse(
+        ETm_rf_vmr_obs_jrh_m3 > 0,
+        Sat_gn_rf_nonvmr_jrh_m3 /
+          ETm_rf_vmr_obs_jrh_m3,
+        NA_real_
+      ),
+
+      s_gn_ir_vmr_jrh = fifelse(
+        ETm_ir_vmr_obs_jrh_m3 > 0,
+        Sat_gn_ir_vmr_jrh_m3 /
+          ETm_ir_vmr_obs_jrh_m3,
+        NA_real_
+      ),
+
+      s_gn_ir_nonvmr_jrh = fifelse(
+        ETm_ir_vmr_obs_jrh_m3 > 0,
+        Sat_gn_ir_nonvmr_jrh_m3 /
+          ETm_ir_vmr_obs_jrh_m3,
+        NA_real_
+      )
     )
   ]
-  
-  s_jrh_tbl[,
-    s_bl_ir_jrh := fifelse(
-      ETm_ir_jrh_m3 > 0,
-      Sat_bl_ir_jrh_m3 / ETm_ir_jrh_m3,
-      NA_real_
+
+  #/*--------------------------------*/
+  #' ## VMR coverage diagnostics
+  #/*--------------------------------*/
+  s_jrh_tbl[
+    ,
+    `:=`(
+      vmr_ETm_coverage_rf = fifelse(
+        ETm_rf_jrh_m3 > 0,
+        ETm_rf_vmr_obs_jrh_m3 / ETm_rf_jrh_m3,
+        NA_real_
+      ),
+
+      vmr_ETm_coverage_ir = fifelse(
+        ETm_ir_jrh_m3 > 0,
+        ETm_ir_vmr_obs_jrh_m3 / ETm_ir_jrh_m3,
+        NA_real_
+      )
     )
   ]
-  
-  s_jrh_tbl[,
-    s_total_ir_jrh := fifelse(
-      ETm_ir_jrh_m3 > 0,
-      Sat_total_ir_jrh_m3 / ETm_ir_jrh_m3,
-      NA_real_
-    )
-  ]
-  
+
   setorder(s_jrh_tbl, ADM0_NAME, stage)
   
   return(s_jrh_tbl[])

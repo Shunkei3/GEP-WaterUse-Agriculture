@@ -18,24 +18,36 @@ $$
 # Load data
 ```{r}
 library(countrycode)
-source(here("Scr/Agriculture/2-Irr_Code/DataPrep/0-functions-dataprep.R"))
+source(here("Code/0-functions-dataprep.R"))
+
+raw_data_dir <- 
+  "/Volumes/baseHD/NatCapTEEMs/GEP/WaterUse_Ag/Data/Raw"
 
 # /*===== CropGBWater crop and SPAM crops correspondence =====*/
-crop_gbwater_spam_tbl <- fread(here("Data/Raw/CropGBWater_SPAM_crop_correspondence.csv"))
+crop_gbwater_spam_tbl <- 
+  fread(
+    file.path(raw_data_dir, "CropGBWater_SPAM_crop_correspondence.csv")
+  )
 
 #/*--------------------------------*/
 #' ## SPAM 2020 data
 #/*--------------------------------*/
 spam_2020_total_raw <- 
-  fread(here("Data/Raw/SPAM/2020/spam2020V2r2_global_P_TA.csv")) %>%
+  fread(
+    file.path(raw_data_dir, "SPAM/2020/spam2020V2r2_global_P_TA.csv")
+  ) %>%
   .[, iso3 := countrycode(ADM0_NAME, origin = "country.name", destination = "iso3c")]
 
 spam_2020_rain_raw <- 
-  fread(here("Data/Raw/SPAM/2020//spam2020V2r2_global_P_TR.csv")) %>%
+  fread(
+    here("Data/Raw/SPAM/2020//spam2020V2r2_global_P_TR.csv")
+  ) %>%
   .[, iso3 := countrycode(ADM0_NAME, origin = "country.name", destination = "iso3c")]
 
 spam_2020_irr_raw  <- 
-  fread(here("Data/Raw/SPAM/2020//spam2020V2r2_global_P_TI.csv")) %>%
+  fread(
+    file.path(raw_data_dir, "SPAM/2020/spam2020V2r2_global_P_TI.csv")
+  ) %>%
   .[, iso3 := countrycode(ADM0_NAME, origin = "country.name", destination = "iso3c")]
 
 #/*--------------------------------*/
@@ -45,17 +57,23 @@ spam_2020_irr_raw  <-
 ls_cols <- c("ADM0_NAME", "WHEA_A", "WHEA_I", "WHEA_R")
 
 Wheat_spring_grid_avg <- 
-  fread(here("Data/Processed/CropGBWater/wc/Wheat_spring_grid_avg.csv")) %>%
+  fread(
+    here("Data/Processed/CropGBWater/wc/Wheat_spring_grid_avg.csv")
+  ) %>%
   .[, ..ls_cols] %>%
   .[, CropGBWater_crop := "Wheat_spring"]
 
 Wheat_winter_grid_avg <-
-  fread(here("Data/Processed/CropGBWater/wc/Wheat_winter_grid_avg.csv")) %>%
+  fread(
+    here("Data/Processed/CropGBWater/wc/Wheat_winter_grid_avg.csv")
+  ) %>%
   .[, ..ls_cols] %>%
   .[, CropGBWater_crop := "Wheat_winter"]
 
 Wheat_winter_fullcover_grid_avg <-
-  fread(here("Data/Processed/CropGBWater/wc/Wheat_winter_fullcover_grid_avg.csv")) %>%
+  fread(
+    here("Data/Processed/CropGBWater/wc/Wheat_winter_fullcover_grid_avg.csv")
+  ) %>%
   .[, ..ls_cols] %>%
   .[, CropGBWater_crop := "Wheat_winter_fullcover"]
 

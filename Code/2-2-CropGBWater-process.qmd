@@ -11,14 +11,22 @@
 #/*--------------------------------*/
 #' ## Preparation
 #/*--------------------------------*/
+# === Set paths === #
+# Path to the directory that contains the raw data
+raw_data_dir <- 
+  "/Volumes/baseHD/NatCapTEEMs/GEP/WaterUse_Ag/Data/Raw"
+
+
+# ===  Load crop correspondence data === #
 crop_correspondence_dt <- 
   fread(here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv")) %>%
   .[!CropGBWater_crop %in% c("Wheat_winter_fullcover", "Wheat_winter", "Wheat_spring")]
 
+# List of CropGBWater crops to be processed
 ls_CropGBWater_crop <- crop_correspondence_dt$CropGBWater_crop
 
 
-# --- Chekc --- #
+# --- Check --- #
 # ls_crop_calender_file <- 
 #   list.files(
 #     here("Data/Raw/CropGBWater/CropCalendarFolders"),
@@ -38,11 +46,14 @@ for(crop_i in ls_CropGBWater_crop) {
   #/*--------------------------------*/
   #' ## Compile crop calender data
   #/*--------------------------------*/
+  # Crop-calender data are ClimateID-level data
   ls_calender_file <- 
     list.files(
-      here("Data/Raw/CropGBWater/CropCalendarFolders", crop_i),
+      file.path(raw_data_dir, "CropGBWater/CropCalendarFolders", crop_i),
       full.names = TRUE
     )
+  # Each file corresponds to one CroGBWater climate grid (ClimateID) for that crop
+  # head(ls_calender_file)
   # length(ls_calender_file)
   
   stopifnot(length(ls_calender_file) > 0)
@@ -70,13 +81,8 @@ for(crop_i in ls_CropGBWater_crop) {
     calender_dt[,
       .(
         ClimateID = ID,
-        Kc_ini,
-        Kc_mid,
-        Kc_end,
-        L_ini,
-        L_dev,
-        L_mid,
-        L_late,
+        Kc_ini, Kc_mid, Kc_end,
+        L_ini, L_dev, L_mid, L_late,
         J_plant,
         Month,
         Day,
@@ -85,10 +91,15 @@ for(crop_i in ls_CropGBWater_crop) {
     ]
 
   #/*--------------------------------*/
-  #' ## Merge with 
+  #' ## Merge with CropGBWater water consumption data
   #/*--------------------------------*/
   # --- Load CropGBWater water consumption data --- #
-  wc_file <- here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded", paste0("Data_S5_Y2020_", crop_i, "_grid_avg.csv"))
+  wc_file <- 
+    file.path(
+      raw_data_dir,
+      "CropGBWater/Data_S5_Y2020_WC_mm_gridded", 
+      paste0("Data_S5_Y2020_", crop_i, "_grid_avg.csv")
+    )
 
   if (!file.exists(wc_file)) {
     stop("Water-consumption file does not exist: ", wc_file)

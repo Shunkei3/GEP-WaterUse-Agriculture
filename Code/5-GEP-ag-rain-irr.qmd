@@ -2,7 +2,10 @@
 title: "GEP calculation for irrigated agriculture"
 ---
 
-# Data loading
+
+# Data Preparation
+
+## Data loading
 
 ```{r}
 #/*--------------------------------*/
@@ -20,16 +23,21 @@ z_ee_r250 <-
 #' ## CropGBWater_crop and crop name mapping
 #/*--------------------------------*/
 crop_param_dt <- 
-  fread(here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv")) %>%
+  fread(
+    here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv")
+  ) %>%
   .[, .(CropGBWater_crop, crop_name)]
 
 #/*--------------------------------*/
 #' ## Load lambda table
 #/*--------------------------------*/
-lambda_jr_tbl_raw <- fread(here("Data/Processed/lambda_jr_tbl_CropGBWater.csv"))
+lambda_jr_tbl_raw <- 
+  fread(
+    here("Data/Processed/lambda_jr_tbl_CropGBWater.csv")
+  )
 
 # Add country name, 
-lambda_jr_tb <- 
+lambda_jr_tbl <- 
   lambda_jr_tbl_raw %>%
   # Keep only variables needed for GEP calculation
   .[,
@@ -39,17 +47,22 @@ lambda_jr_tb <-
       lambda_gn_rf,
       lambda_gn_ir,
       lambda_bl_ir,
-      lambda_total_ir
+      lambda_total_ir,
+      lambda_gn_rf_vmr,
+      lambda_gn_ir_vmr
     )
   ]
 
-# lambda_jr_tb[is.na(iso3_r250_id)|is.na(iso3_r250_name)|is.na(iso3_r250_label), ]
+# lambda_jr_tbl[is.na(iso3_r250_id)|is.na(iso3_r250_name)|is.na(iso3_r250_label), ]
 # nrow(lambda_jr_tbl) == nrow(lambda_jr_tbl_raw)
 
 #/*--------------------------------*/
 #' ## Load GPV table
 #/*--------------------------------*/
-gpv_jr_tbl_raw <- fread(here("Data/Processed/GPV_rainfed_irrigated_CropGBWater_2020.csv"))
+gpv_jr_tbl_raw <- 
+  fread(
+    here("Data/Processed/GPV_rainfed_irrigated_CropGBWater_2020.csv")
+  )
 
 gpv_jr_tbl <- 
   gpv_jr_tbl_raw[,.(
@@ -60,13 +73,15 @@ gpv_jr_tbl <-
   )]
 
 
-gpv_jr_tbl[is.na(iso3_r250_label), ]
-# nrow(gpv_cropgbwater_jr) == nrow(gpv_cropgbwater_jr_raw)
+# gpv_jr_tbl[is.na(iso3_r250_label), ]
 
 #/*--------------------------------*/
 #' ## theta table
 #/*--------------------------------*/
-theta_r_tbl_raw <- fread(here("Data/Processed/theta_table_final.csv"))
+theta_r_tbl_raw <- 
+  fread(
+    here("Data/Processed/theta_table_final.csv")
+  )
 
 theta_r_tbl <-
   theta_r_tbl_raw[,.(
@@ -74,34 +89,34 @@ theta_r_tbl <-
     theta
   )]
 
-theta_r_tbl[is.na(iso3_r250_label), ]
+# theta_r_tbl[is.na(iso3_r250_label), ]
 # any(is.na(theta_r_tbl$iso3_r250_id))
 ```
 
-# Merging data for GEP calculation
+## Merging data for GEP calculation
 
 ```{r}
 # === Check === #
-ls_country_gpv <- unique(gpv_jr_tbl[!(is.na(GPV_rain_jr) & is.na(GPV_irr_jr)), iso3_r250_label])
-ls_country_lambda <- unique(lambda_jr_tb[!(is.na(lambda_gn_rf) & is.na(lambda_gn_ir) & is.na(lambda_bl_ir) & is.na(lambda_total_ir)), iso3_r250_label])
+# ls_country_gpv <- unique(gpv_jr_tbl[!(is.na(GPV_rain_jr) & is.na(GPV_irr_jr)), iso3_r250_label])
+# ls_country_lambda <- unique(lambda_jr_tb[!(is.na(lambda_gn_rf) & is.na(lambda_gn_ir) & is.na(lambda_bl_ir) & is.na(lambda_total_ir)), iso3_r250_label])
 
-uniqueN(ls_country_gpv)
-uniqueN(ls_country_lambda)
+# uniqueN(ls_country_gpv)
+# uniqueN(ls_country_lambda)
 
-intersect(ls_country_gpv, ls_country_lambda) %>% length()
+# intersect(ls_country_gpv, ls_country_lambda) %>% length()
 
 
 # === Merge lambda and GPV === #
 lambda_gpv_jr_dt <- 
   merge(
     gpv_jr_tbl,
-    lambda_jr_tb,
+    lambda_jr_tbl,
     by = c("CropGBWater_crop", "iso3_r250_label")
   ) %>%
   .[!(is.na(lambda_gn_rf) & is.na(lambda_gn_ir) & is.na(lambda_bl_ir) & is.na(lambda_total_ir))] %>%
   .[!(is.na(GPV_rain_jr) & is.na(GPV_irr_jr))]
 
-uniqueN(lambda_gpv_jr_dt$iso3_r250_label)
+# uniqueN(lambda_gpv_jr_dt$iso3_r250_label)
 
 # === Merge with theta === #
 lambda_gpv_jr_theta_dt <- 
@@ -111,7 +126,7 @@ lambda_gpv_jr_theta_dt <-
     by = "iso3_r250_label"
   )
 
-uniqueN(lambda_gpv_jr_theta_dt$iso3_r250_label)
+# uniqueN(lambda_gpv_jr_theta_dt$iso3_r250_label)
 
 # === Add iso code === #
 lambda_gpv_jr_theta_dt <- 
@@ -122,37 +137,56 @@ lambda_gpv_jr_theta_dt <-
     by.y = "iso3_r250_label",
   )
 
-uniqueN(lambda_gpv_jr_theta_dt$iso3_r250_label)
+# uniqueN(lambda_gpv_jr_theta_dt$iso3_r250_label)
 
 ```
 
+# GEP Calculation 
 
-# Crop-country-source specific GEP calculation
+## Crop-country level GEP calculation
 
 ```{r}
+# === GEP by crop, country, source === #
 gep_crop_country_source <- 
   copy(lambda_gpv_jr_theta_dt) %>%
-  .[, `:=`(
-    GEP_gn_rf_jr = lambda_gn_rf * theta * GPV_rain_jr,
-    GEP_gn_irr_jr = lambda_gn_ir * theta * GPV_irr_jr,
-    GEP_bl_irr_jr = lambda_bl_ir * theta * GPV_irr_jr,
-    GEP_total_irr_jr = lambda_total_ir * theta * GPV_irr_jr
-  )] %>%
+  .[
+    , `:=`(
+      GEP_gn_rf_jr = lambda_gn_rf * theta * GPV_rain_jr,
+      GEP_gn_irr_jr = lambda_gn_ir * theta * GPV_irr_jr,
+      GEP_bl_irr_jr = lambda_bl_ir * theta * GPV_irr_jr,
+      GEP_total_irr_jr = lambda_total_ir * theta * GPV_irr_jr,
+
+      GEP_gn_rf_vmr_jr = lambda_gn_rf_vmr * theta * GPV_rain_jr,
+      GEP_gn_irr_vmr_jr = lambda_gn_ir_vmr * theta * GPV_irr_jr
+    )
+  ] %>%
   .[, GEP_unit := "1000 current US$"]
 
 
 # === Total GEP by crop and country === #
 tg_cols <- c("GEP_gn_rf_jr", "GEP_gn_irr_jr", "GEP_bl_irr_jr")
-gep_crop_country_source[, GEP_total_jr := rowSums(.SD, na.rm = TRUE), .SDcols = tg_cols]
+
+gep_crop_country_source[
+  , GEP_total_jr := rowSums(.SD, na.rm = TRUE), 
+  .SDcols = tg_cols
+]
+
 
 # === For checking === #
-tg_cols_check <- c("GEP_gn_rf_jr", "GEP_total_irr_jr")
-gep_crop_country_source[, GEP_total_alt_jr := rowSums(.SD, na.rm = TRUE), .SDcols = tg_cols_check]
+# tg_cols_check <- c("GEP_gn_rf_jr", "GEP_total_irr_jr")
 
-# Difference should be close to zero
-gep_crop_country_source[, GEP_total_diff := abs(GEP_total_alt_jr - GEP_total_jr)]
+# gep_crop_country_source[
+#   , GEP_total_alt_jr := rowSums(.SD, na.rm = TRUE),
+#   .SDcols = tg_cols_check
+# ]
 
-gep_crop_country_source[GEP_total_diff > 1e-6, ]
+
+# # Difference should be close to zero
+# gep_crop_country_source[
+#   , GEP_total_diff := abs(GEP_total_alt_jr - GEP_total_jr)
+# ]
+
+# gep_crop_country_source[GEP_total_diff > 1e-6, ]
 
 # --- Save --- #
 # Add crop names
@@ -164,13 +198,13 @@ gep_crop_country_source <-
 
 fwrite(
   gep_crop_country_source,
-  here("Data/Results/gep_agwater_crop_country_source_2020.csv")
+  here("Data/Results/gep_agwater_crop_country_source.csv")
 )
 
 ```
 
 
-# Country-source-level GEP calculation
+## Country-level GEP aggregation
 
 ```{r}
 sum_if_any <- function(x) {
@@ -184,6 +218,9 @@ gep_country_source <-
       GEP_gn_ir = sum_if_any(GEP_gn_irr_jr),
       GEP_bl_irr = sum_if_any(GEP_bl_irr_jr),
       GEP_total_irr = sum_if_any(GEP_total_irr_jr),
+
+      GEP_gn_rf_vmr = sum_if_any(GEP_gn_rf_vmr_jr),
+      GEP_gn_ir_vmr = sum_if_any(GEP_gn_irr_vmr_jr),
 
       GEP_total = sum_if_any(GEP_total_jr),
 
@@ -203,17 +240,6 @@ fwrite(
 
 # For report
 
-
-```{r}
-#/*--------------------------------*/
-#' ## Report GEP by source and country
-#/*--------------------------------*/
-# gep_country_report_final <- 
-#   fread(here("Data/Results/gep_agwater_country_source.csv"))
-
-# nrow(gep_country_report_final)
-
-```
 ```{r}
 #/*--------------------------------*/
 #' ## Report total GEP by country
@@ -248,8 +274,7 @@ fwrite(
 
 ```
 
-# Analysis
-
+# Take a look at the results
 
 ```{r}
 gep_country_source_report <- 

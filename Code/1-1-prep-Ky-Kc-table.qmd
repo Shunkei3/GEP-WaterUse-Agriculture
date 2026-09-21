@@ -13,6 +13,12 @@ title: "Createing parameter table"
 ## CROPWAT crop-parameter table
 
 ```{r}
+# Path to raw data directory
+raw_data_dir <- 
+  "/Volumes/baseHD/NatCapTEEMs/GEP/WaterUse_Ag/Data/Raw"
+```
+
+```{r}
 # --- Load packages --- #
 library(CropWat)
 
@@ -21,7 +27,10 @@ cp <-
   data.table() # 55 crops
 
 # --- Save --- #
-fwrite(cp, here("Data/Raw/CropWat_crop_params_raw.csv"))
+fwrite(
+  cp, 
+  file.pathe(raw_data_dir, "CropWat_crop_params_raw.csv")
+)
 ```
 
 ## Crops in CropGBWater dataset
@@ -32,7 +41,7 @@ fwrite(cp, here("Data/Raw/CropWat_crop_params_raw.csv"))
 #/*--------------------------------*/
 ls_data_files <- 
   list.files(
-    here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded"),
+    file.path(faw_data_dir, "CropGBWater/Data_S5_Y2020_WC_mm_gridded"),
     full.names = FALSE,
     pattern = "grid_avg.csv"
   )
@@ -44,7 +53,10 @@ ls_crops <-
   sort()
 
 
-wheat_dt <- fread(here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded/Data_S5_Y2020_Wheat_grid_avg.csv"))
+wheat_dt <- 
+  fread(
+    file.path(raw_data_dir, "CropGBWater/Data_S5_Y2020_WC_mm_gridded/Data_S5_Y2020_Wheat_grid_avg.csv")
+  )
 ```
 
 
@@ -52,13 +64,16 @@ wheat_dt <- fread(here("Data/Raw/CropGBWater/Data_S5_Y2020_WC_mm_gridded/Data_S5
 
 We manually created a correspondence table between CropGBWater crop classes and FAO/CROPWAT crop classes. The file name is `CropGBWater_CROPWAT_correspondence.csv`. Then, we merge the crop correspondence table with the CROPWAT crop-parameter table to create a final crop-parameter table.
 
-
-
-
 ```{r}
-crop_tbl <- fread("Data/Raw/CropGBWater_CROPWAT_correspondence.csv")
+crop_tbl <- 
+  fread(
+    file.path(raw_data_dir, "CropGBWater_CROPWAT_correspondence.csv")
+  ) 
 
-cropwat_tbl <- fread("Data/Raw/CropWat_crop_params_raw.csv")
+cropwat_tbl <- 
+  fread(
+    file.path(raw_data_dir, "CropWat_crop_params_raw.csv")
+  )
 
 
 # --- Merge --- #
@@ -72,7 +87,10 @@ Ky_Kc_tbl <-
   )
 
 # --- Save --- #
-fwrite(Ky_Kc_tbl, here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv"))
+fwrite(
+  Ky_Kc_tbl, 
+  here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv")
+)
 ```
 
 

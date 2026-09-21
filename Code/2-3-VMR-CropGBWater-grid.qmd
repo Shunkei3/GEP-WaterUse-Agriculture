@@ -1,0 +1,148 @@
+---
+title: "Assign VMR Values to GlobalGBWater Grid"
+---
+
+# Objective
++ Overlay the VMR gridded data onto the CropGBWater gridded data. Assign the VMR values to the corresponding grid cells in the GlobalGBWater raster.
++ The final output should should be grid_code level data and it should contain grid_code and VMR value.
+
+
+# Data
++ The "*global_vmr_p.csv*" is the gridded data are at the 1.5 degree resolution, with an extent from 79.5 N to 57 S, and from 180 W to 178.5 E.
+  + It is the VMR precipitation sink ratio: the share of precipitation at each receiving location that comes from upwind vegetation-regulated evaporation. 
+
++ Meanwhile, the CropGBWater gridded data is  5 arc-minute (1/12 degree) grids.
+
++ If the grids are perfectly aligned, one VMR cell contains 18*18 = 324 CropGBWater cells.
+
+
+# Data Preparation
+```{r}
+
+# Set the directory containing the raw data files
+raw_data_dir <- 
+  "/Volumes/baseHD/NatCapTEEMs/GEP/WaterUse_Ag/Data/Raw"
+
+
+# === Load VMR matrix === #
+# the 1.5 degree resolution, with an extent from 79.5 N to 57 S, and from 180 W to 178.5 E
+vmr_mat <- 
+  fread(
+    file.path(
+      raw_data_dir, 
+      "global_evap_recycling/global_vmr_p.csv"
+    )
+  )
+
+# === Prepare CropGBWater Grid Code Lookup === #
+# I need to know all combinations of (grid_code, X_CORD, Y_CORD)
+ls_crops <- 
+  fread(
+    here("Data/Processed/CropGBWater_FAO_Ky_Kc.csv")
+  )$CropGBWater_crop
+
+grid_code_lookup <- 
+  lapply(
+    ls_crops,
+    \(x){
+        fread(
+          here(
+            paste0("Data/Processed/CropGBWater/wc/", x, "_grid_avg.csv")
+          )
+        )[
+          , .(grid_code, X_CORD, Y_CORD)
+        ]
+    }
+  ) %>%
+  rbindlist() %>%
+  unique()
+```
+
+
+
+
+```{r}
+# /*===========================================*/
+#'=  Construct georeferenced 1.5-degree VMR raster =
+# /*===========================================*/
+# VMR grid-cell centers:
+# longitude: -180, -178.5, ..., 178.5
+# latitude:    79.5, 78.0, ..., -57.0
+#
+# Therefore raster boundaries are half a cell (0.75 degrees) beyond the outer cell centers.
+
+vmr_rast <-
+  rast(
+    nrows = 92,
+    ncols = 240,
+    xmin = -180.75,
+    xmax =  179.25,
+    ymin =  -57.75,
+    ymax =   80.25,
+    crs = "EPSG:4326"
+  )
+
+# terra stores cells row-by-row from upper-left.
+# global_vmr_p.csv is also arranged north-to-south by rows,
+# so transpose before vectorizing because R normally vectorizes
+# matrices column-by-column.
+values(vmr_rast) <- as.vector(t(vmr_mat))
+
+names(vmr_rast) <- "vmr_p_pct"
+
+
+# /*===========================================*/
+#'=  Convert CropGBWater grid centers to spatial points =
+# /*===========================================*/
+crop_points <- 
+  vect(
+    grid_code_lookup,
+    geom = c("X_CORD", "Y_CORD"),
+    crs = "EPSG:4326",
+    keepgeom = TRUE
+  )
+
+
+# /*===========================================*/
+#'=  Extract VMR value for each CropGBWater grid cell =
+# /*===========================================*/
+vmr_extract <- 
+  terra::extract(
+    vmr_rast,
+    crop_points
+  )
+
+grid_code_vmr <-
+  copy(grid_code_lookup)[
+    , vmr_p_pct := vmr_extract$vmr_p_pct
+  ][
+    , vmr_p := vmr_p_pct/100
+  ]
+
+
+# /*===== Check =====*/
+grid_code_vmr[]
+
+grid_code_vmr[
+  ,
+  .(
+    n_grid = .N,
+    n_vmr = sum(!is.na(vmr_p)),
+    n_missing_vmr = sum(is.na(vmr_p)),
+    share_missing_vmr = mean(is.na(vmr_p)),
+    min_vmr = min(vmr_p, na.rm = TRUE),
+    max_vmr = max(vmr_p, na.rm = TRUE)
+  )
+]
+```
+
+
+
+```{r}
+# === Save === #
+fwrite(
+  grid_code_vmr,
+  here("Data/Processed/CropGBWater_grid_code_vmr.csv")
+)
+
+```
