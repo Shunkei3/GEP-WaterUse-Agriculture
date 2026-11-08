@@ -1,0 +1,168 @@
+# Overview
+## Objective
++ Match the 2020 commercial-agriculture GEP by country and FAOSTAT crop to the CropGBWater crop classes used in the agricultural water-provisioning calculation.
++ Allocate shared FAOSTAT crop values (wheat and millet) across their CropGBWater classes using SPAM production quantities.
++ Split each crop-country commercial GEP value between rainfed and irrigated production using SPAM production shares.
+
+## Data
++ `crop_gep_2020_by_country_crop.csv`: Commercial-agriculture GEP by country and FAOSTAT crop for 2020, in current US dollars. Save it under `Data/Raw/CommercialAgriculture/`.
++ `CropGBWater_FAOSTAT_GPV_crop_correspondence.csv`: FAOSTAT-to-CropGBWater crop mapping, in `Data/Processed/`.
++ `spam_cropgbwater_share.csv`: Crop-country production quantities and rainfed/irrigated shares, in `Data/Processed/`.
+
+The output is in thousand current US dollars, matching the monetary units in the existing GPV calculation. An entirely missing source group and undefined production shares remain missing. When some source items within a group are missing, the available values are summed.
+
+# Data preparation
+
+## Load data
+
+```{r}
+library(data.table)
+library(here)
+library(countrycode)
+library(dplyr)
+
+# /*===========================================*/
+#'=  Commercial agriculture GEP =
+# /*===========================================*/
+commercial_gep_raw <-
+  fread(
+    here("Data/Raw/CommercialAgriculture/crop_gep_2020_by_country_crop.csv")
+  ) %>%
+  # Historical entities have no 2020 GEP and share M49 codes with current countries.
+  .[!country %in% c("Ethiopia PDR", "Serbia and Montenegro", "Sudan (former)")] %>%
+  .[, area_m49 := as.integer(gsub("'", "", as.character(area_code_M49), fixed = TRUE))] %>%
+  .[, iso3 := countrycode(
+    area_m49,
+    origin = "un",
+    destination = "iso3c",
+    custom_match = c("159" = "CHN")
+  )] %>%
+  .[!is.na(iso3)] %>%
+  .[, commercial_gep_source_kusd := as.numeric(gep) / 1000]
+
+# /*===========================================*/
+#'=  FAOSTAT-to-CropGBWater correspondence =
+# /*===========================================*/
+crop_gbwater_faostat_tbl <-
+  fread(
+    here("Data/Processed/CropGBWater_FAOSTAT_GPV_crop_correspondence.csv")
+  ) %>%
+  .[, .(CropGBWater_crop, FAOSTAT_Item)] %>%
+  unique()
+
+# /*===========================================*/
+#'=  SPAM production quantities =
+# /*===========================================*/
+spam_cropgbwater_jr <-
+  fread(
+    here("Data/Processed/spam_cropgbwater_share.csv")
+  ) %>%
+  .[, Q_total_for_share := Q_rain + Q_irr]
+```
+
+## Match FAOSTAT items to CropGBWater crops
+
+```{r}
+sum_if_any <- function(x) {
+  if (all(is.na(x))) NA_real_ else sum(x, na.rm = TRUE)
+}
+
+shared_items <-
+  crop_gbwater_faostat_tbl[
+    , .(n_crop = uniqueN(CropGBWater_crop)),
+    by = FAOSTAT_Item
+  ][n_crop > 1L, FAOSTAT_Item]
+
+# /*===== Direct mapping =====*/
+# Several FAOSTAT items can belong to one CropGBWater class, such as citrus.
+commercial_gep_direct_jr <-
+  merge(
+    commercial_gep_raw[!crop %in% shared_items],
+    crop_gbwater_faostat_tbl,
+    by.x = "crop",
+    by.y = "FAOSTAT_Item"
+  ) %>%
+  .[
+    , .(
+      commercial_gep_total_kusd = sum_if_any(commercial_gep_source_kusd),
+      FAOSTAT_items = paste(sort(unique(crop)), collapse = "; ")
+    ),
+    by = .(iso3, CropGBWater_crop)
+  ]
+
+# /*===== Shared FAOSTAT items: wheat and millet =====*/
+# Allocate each source value once across its corresponding CropGBWater crops.
+# Start from SPAM, because a wheat variant may not occur in a country.
+commercial_gep_shared_jr <-
+  merge(
+    spam_cropgbwater_jr[, .(iso3, CropGBWater_crop, Q_total_for_share)],
+    crop_gbwater_faostat_tbl[FAOSTAT_Item %in% shared_items],
+    by = "CropGBWater_crop"
+  ) %>%
+  merge(
+    commercial_gep_raw[crop %in% shared_items,
+      .(iso3, FAOSTAT_Item = crop, commercial_gep_source_kusd)],
+    by = c("iso3", "FAOSTAT_Item")
+  )
+
+commercial_gep_shared_jr[
+  , Q_shared := sum(Q_total_for_share, na.rm = TRUE),
+  by = .(iso3, FAOSTAT_Item)
+]
+
+commercial_gep_shared_jr[, commercial_gep_total_kusd := fifelse(
+  Q_shared > 0,
+  commercial_gep_source_kusd * Q_total_for_share / Q_shared,
+  NA_real_
+)]
+
+commercial_gep_shared_jr <-
+  commercial_gep_shared_jr[,
+    .(iso3, CropGBWater_crop, commercial_gep_total_kusd,
+      FAOSTAT_items = FAOSTAT_Item)
+  ]
+```
+
+## Split commercial GEP between rainfed and irrigated production
+
+```{r}
+commercial_gep_jr <-
+  rbindlist(
+    list(commercial_gep_direct_jr, commercial_gep_shared_jr),
+    use.names = TRUE
+  ) %>%
+  merge(
+    spam_cropgbwater_jr[,
+      .(iso3, CropGBWater_crop, Q_rain, Q_irr, Q_total_for_share)
+    ],
+    by = c("iso3", "CropGBWater_crop"),
+    all.x = TRUE
+  )
+
+commercial_gep_jr[, `:=`(
+  share_prod_rain = fifelse(Q_total_for_share > 0, Q_rain / Q_total_for_share, NA_real_),
+  share_prod_irr  = fifelse(Q_total_for_share > 0, Q_irr / Q_total_for_share, NA_real_)
+)]
+
+commercial_gep_jr[, `:=`(
+  commercial_gep_rain_kusd = commercial_gep_total_kusd * share_prod_rain,
+  commercial_gep_irr_kusd  = commercial_gep_total_kusd * share_prod_irr,
+  split_status = fcase(
+    is.na(commercial_gep_total_kusd), "missing_source_or_shared_allocation",
+    is.na(Q_total_for_share), "missing_SPAM_row",
+    Q_total_for_share <= 0, "zero_SPAM_production",
+    default = "split_available"
+  )
+)]
+commercial_gep_jr[, GEP_unit := "1000 current US$"]
+```
+
+## Save output
+
+```{r}
+dir.create(here("Data/Processed"), recursive = TRUE, showWarnings = FALSE)
+fwrite(
+  commercial_gep_jr,
+  here("Data/Processed/commercial_gep_rainfed_irrigated_CropGBWater_2020.csv")
+)
+```

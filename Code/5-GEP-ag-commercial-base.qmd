@@ -1,0 +1,251 @@
+# Overview
+## Objective
++ Calculate agricultural water-provisioning GEP using the commercial-agriculture GEP prepared in `4-1-prep-commercial-GEP.qmd`.
++ Match commercial GEP and the water-contribution coefficients by country and CropGBWater crop.
++ Calculate green-water GEP on rainfed and irrigated land and blue-water GEP on irrigated land.
++ Report every country in `z_ee_r250`, with a reason when its GEP is missing.
+
+## Data
++ `commercial_gep_rainfed_irrigated_CropGBWater_2020.csv`: Commercial GEP split between rainfed and irrigated production, in `Data/Processed/`.
++ `lambda_jr_tbl_CropGBWater.csv`: Crop-country water-contribution coefficients, in `Data/Processed/`.
++ `z_ee_r250_correspondence.gpkg`: Country identifiers and names, in `Data/Raw/boundary/`.
+
+Commercial GEP is already the monetary base, so the GPV adjustment factor `theta` is not applied again. A component with zero commercial GEP is zero even if its lambda is missing. A positive component with a missing lambda stays missing. Country totals sum crop-country values for which all three components can be calculated.
+The country report retains the full boundary country list. Missing country GEP values remain missing and receive a reason in `missing_reason`.
+
+The commercial GEP input is in current 2020 US dollars. Monetary values are converted to 2019 US dollars using the annual-average U.S. CPI-U (2019: 255.657; 2020: 258.811), from the [U.S. Bureau of Labor Statistics](https://www.bls.gov/regions/mid-atlantic/data/consumerpriceindexannualandsemiannual_table.htm).
+
+# Data preparation
+
+## Load data
+
+```{r}
+library(data.table)
+library(here)
+library(sf)
+library(dplyr)
+
+# /*===========================================*/
+#'=  Commercial agriculture GEP =
+# /*===========================================*/
+commercial_gep_jr <-
+  fread(
+    here("Data/Processed/commercial_gep_rainfed_irrigated_CropGBWater_2020.csv")
+  )
+
+# /*===========================================*/
+#'=  Lambda table =
+# /*===========================================*/
+lambda_jr_tbl <-
+  fread(
+    here("Data/Processed/lambda_jr_tbl_CropGBWater.csv")
+  ) %>%
+  .[
+    , .(
+      iso3, CropGBWater_crop, crop_name,
+      lambda_gn_rf, lambda_gn_ir, lambda_bl_ir,
+      lambda_total_ir, lambda_gn_rf_vmr, lambda_gn_ir_vmr
+    )
+  ]
+
+# /*===========================================*/
+#'=  Country identifiers =
+# /*===========================================*/
+z_ee_r250 <-
+  st_read(
+    here("Data/Raw/boundary/z_ee_r250_correspondence.gpkg"),
+    quiet = TRUE
+  ) %>%
+  as.data.table() %>%
+  .[, .(iso3_r250_id, iso3_r250_name, iso3_r250_label)] %>%
+  unique()
+```
+
+## Merge commercial GEP and lambda
+
+```{r}
+commercial_gep_lambda_jr <-
+  merge(
+    commercial_gep_jr,
+    lambda_jr_tbl,
+    by = c("iso3", "CropGBWater_crop"),
+    all.x = TRUE
+  ) %>%
+  merge(
+    z_ee_r250,
+    by.x = "iso3",
+    by.y = "iso3_r250_label",
+    all.x = TRUE
+  )
+```
+
+# GEP calculation
+
+## Crop-country level GEP calculation
+
+```{r}
+# === GEP by crop, country, source === #
+gep_crop_country_source <-
+  copy(commercial_gep_lambda_jr) %>%
+  .[
+    , `:=`(
+      GEP_gn_rf_jr = fifelse(
+        commercial_gep_rain_kusd == 0,
+        0,
+        lambda_gn_rf * commercial_gep_rain_kusd
+      ),
+      GEP_gn_irr_jr = fifelse(
+        commercial_gep_irr_kusd == 0,
+        0,
+        lambda_gn_ir * commercial_gep_irr_kusd
+      ),
+      GEP_bl_irr_jr = fifelse(
+        commercial_gep_irr_kusd == 0,
+        0,
+        lambda_bl_ir * commercial_gep_irr_kusd
+      ),
+      GEP_total_irr_jr = fifelse(
+        commercial_gep_irr_kusd == 0,
+        0,
+        lambda_total_ir * commercial_gep_irr_kusd
+      ),
+      GEP_gn_rf_vmr_jr = fifelse(
+        commercial_gep_rain_kusd == 0,
+        0,
+        lambda_gn_rf_vmr * commercial_gep_rain_kusd
+      ),
+      GEP_gn_irr_vmr_jr = fifelse(
+        commercial_gep_irr_kusd == 0,
+        0,
+        lambda_gn_ir_vmr * commercial_gep_irr_kusd
+      )
+    )
+  ]
+
+# === Total GEP by crop and country === #
+tg_cols <- c("GEP_gn_rf_jr", "GEP_gn_irr_jr", "GEP_bl_irr_jr")
+
+gep_crop_country_source[
+  , GEP_total_jr := fifelse(
+    rowSums(!is.na(.SD)) == length(tg_cols),
+    rowSums(.SD),
+    NA_real_
+  ),
+  .SDcols = tg_cols
+]
+```
+
+## Convert to 2019 US dollars
+
+```{r}
+cpi_2019 <- 255.657
+cpi_2020 <- 258.811
+usd_2020_to_2019 <- cpi_2019 / cpi_2020
+
+monetary_cols <- c(
+  "commercial_gep_total_kusd",
+  "commercial_gep_rain_kusd",
+  "commercial_gep_irr_kusd",
+  "GEP_gn_rf_jr",
+  "GEP_gn_irr_jr",
+  "GEP_bl_irr_jr",
+  "GEP_total_irr_jr",
+  "GEP_gn_rf_vmr_jr",
+  "GEP_gn_irr_vmr_jr",
+  "GEP_total_jr"
+)
+
+gep_crop_country_source[
+  , (monetary_cols) := lapply(.SD, function(x) x * usd_2020_to_2019),
+  .SDcols = monetary_cols
+]
+gep_crop_country_source[, GEP_unit := "1000 2019 US$"]
+
+# --- Save --- #
+fwrite(
+  gep_crop_country_source,
+  here("Data/Results/gep_agwater_crop_country_source_commercial_base_2019usd.csv")
+)
+```
+
+## Country-level GEP aggregation
+
+```{r}
+sum_if_any <- function(x) {
+  if (all(is.na(x))) NA_real_ else sum(x, na.rm = TRUE)
+}
+
+gep_crop_country_source[, missing_reason_jr := fcase(
+  !is.na(GEP_total_jr), NA_character_,
+  is.na(commercial_gep_total_kusd), "No usable commercial GEP value",
+  split_status == "missing_SPAM_row", "SPAM production data missing",
+  split_status == "zero_SPAM_production", "Zero SPAM production",
+  default = "Required lambda missing"
+)]
+
+# Aggregate the same crop-country rows in each component and the total.
+gep_country_aggregated <-
+  gep_crop_country_source[!is.na(iso3_r250_id),
+    .(
+      GEP_gn_rf = sum_if_any(GEP_gn_rf_jr[!is.na(GEP_total_jr)]),
+      GEP_gn_ir = sum_if_any(GEP_gn_irr_jr[!is.na(GEP_total_jr)]),
+      GEP_bl_irr = sum_if_any(GEP_bl_irr_jr[!is.na(GEP_total_jr)]),
+      GEP_total_irr = sum_if_any(GEP_total_irr_jr[!is.na(GEP_total_jr)]),
+      GEP_gn_rf_vmr = sum_if_any(GEP_gn_rf_vmr_jr[!is.na(GEP_total_jr)]),
+      GEP_gn_ir_vmr = sum_if_any(GEP_gn_irr_vmr_jr[!is.na(GEP_total_jr)]),
+      GEP_total = sum_if_any(GEP_total_jr),
+      n_crop = .N,
+      n_crop_with_gep = sum(!is.na(GEP_total_jr)),
+      missing_reason = if (all(is.na(GEP_total_jr))) {
+        paste(sort(unique(na.omit(missing_reason_jr))), collapse = "; ")
+      } else NA_character_
+    ),
+    by = .(iso3_r250_id, iso3_r250_label = iso3, iso3_r250_name, GEP_unit)
+  ]
+
+# Keep every country in the boundary correspondence, including those with no
+# mapped commercial-agriculture crop record.
+gep_country_source <-
+  merge(
+    z_ee_r250,
+    gep_country_aggregated,
+    by = c("iso3_r250_id", "iso3_r250_label", "iso3_r250_name"),
+    all.x = TRUE
+  )
+
+gep_country_source[is.na(n_crop), `:=`(
+  n_crop = 0L,
+  n_crop_with_gep = 0L,
+  missing_reason = "No mapped commercial-agriculture crop record"
+)]
+gep_country_source[is.na(GEP_unit), GEP_unit := "1000 2019 US$"]
+
+# --- Save --- #
+fwrite(
+  gep_country_source,
+  here("Data/Results/gep_agwater_country_source_commercial_base_2019usd.csv")
+)
+```
+
+# For report
+
+## Report total GEP by country
+
+```{r}
+gep_country_report <-
+  gep_country_source[,
+    .(
+      iso3_r250_id,
+      iso3_r250_label,
+      iso3_r250_name,
+      wateruse_ag_gep = GEP_total * 1000, # Convert from thousand to 2019 US$
+      missing_reason
+    )
+  ]
+
+dir.create(here("Data/Results/Submission"), recursive = TRUE, showWarnings = FALSE)
+fwrite(
+  gep_country_report,
+  here("Data/Results/Submission/wateruse_ag_gep_commercial_base_2019usd.csv")
+)
+```
