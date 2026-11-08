@@ -29,7 +29,7 @@ cp <-
 # --- Save --- #
 fwrite(
   cp, 
-  file.pathe(raw_data_dir, "CropWat_crop_params_raw.csv")
+  file.path(raw_data_dir, "CropWat_crop_params_raw.csv")
 )
 ```
 
@@ -41,7 +41,7 @@ fwrite(
 #/*--------------------------------*/
 ls_data_files <- 
   list.files(
-    file.path(faw_data_dir, "CropGBWater/Data_S5_Y2020_WC_mm_gridded"),
+    file.path(raw_data_dir, "CropGBWater/Data_S5_Y2020_WC_mm_gridded"),
     full.names = FALSE,
     pattern = "grid_avg.csv"
   )
