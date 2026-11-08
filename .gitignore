@@ -18,3 +18,8 @@ z_Document/*
 
 
 
+
+/.quarto/
+**/*.quarto_ipynb
+
+/Writing/
