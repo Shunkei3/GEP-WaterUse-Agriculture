@@ -631,9 +631,9 @@ get_s_jrgh <- function(wc_stage_volume, grid_code_vmr){
 #/*===========================================*/
 #' Aggregate the numerator and denominator volumes first, then calculate s_jrh
 
-get_s_jrh <- function(s_jrgh_tbl){
-  
-  dt <- copy(s_jgh_tbl)
+get_s_jrh <- function(s_jrgh_tbl) {
+
+  dt <- copy(s_jrgh_tbl)
 
   #/*--------------------------------*/
   #' ## Required columns
